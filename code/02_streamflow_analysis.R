@@ -72,7 +72,7 @@ hdat |>
   theme_minimal()
 
 # save cleaned data
-write_csv(ddat, "data/data_daily_cleaned.csv")
-write_csv(hdat, "data/data_hourly_cleaned.csv")
+# write_csv(ddat, "data/data_daily_cleaned.csv")
+# write_csv(hdat, "data/data_hourly_cleaned.csv")
 
 

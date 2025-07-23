@@ -1,5 +1,15 @@
 ### Streamflow data analysis
 
+# Load packages
+library(tidyverse)
+library(rjags)
+
+# Read daily data
+ddat <- read_csv("data/data_daily_cleaned.csv")
+
+# Read hourly data
+hdat <- read_csv("data/data_hourly_cleaned.csv")
+
 # Plot daily streamflow data with horizontal line showing flood threshold
 ddat |> ggplot() +
   geom_line(aes(y = `Streamflow Ave`, x = as.Date(Date))) +
@@ -23,8 +33,6 @@ hdat |> ggplot() +
 
 
 # Start with a null time-series model using JAGS
-# Load JAGS package
-library(rjags)
 
 # Define the model
 RandomWalk = "
@@ -96,29 +104,3 @@ if(diff(time.rng) < 100){
 }
 ecoforecastR::ciEnvelope(time,ci[1,],ci[3,],col=ecoforecastR::col.alpha("lightBlue",0.75))
 points(time,y,pch="+",cex=0.5)
-
-time.rng <- range(time)  # Use actual datetime range
-out <- as.matrix(jags.out)         # Convert from coda to matrix  
-x.cols <- grep("^x", colnames(out)) # Grab all columns that start with 'x'
-ci <- apply(exp(out[, x.cols]), 2, quantile, c(0.025, 0.5, 0.975))  # Model was fit on log scale
-
-# Plot base with POSIXct x-axis
-plot(time, ci[2, ], type = 'n',
-     ylim = range(y, na.rm = TRUE),
-     ylab = "Streamflow",
-     log = 'y',
-     xlim = time.rng,
-     xaxt = 'n')  # Turn off default x-axis
-
-# Use axis.POSIXct for better datetime formatting
-if (as.numeric(diff(time.rng), units = "days") < 100) {
-  axis.POSIXct(1, at = seq(time.rng[1], time.rng[2], by = "1 month"), format = "%Y-%m")
-} else {
-  axis.POSIXct(1, at = seq(time.rng[1], time.rng[2], by = "1 year"), format = "%Y")
-}
-
-# Draw credible interval envelope
-ecoforecastR::ciEnvelope(time, ci[1, ], ci[3, ], col = ecoforecastR::col.alpha("lightBlue", 0.75))
-
-# Add observed data
-points(time, y, pch = "+", cex = 0.5)
