@@ -77,18 +77,18 @@ j.model   <- jags.model (file = textConnection(RandomWalk),
                          inits = init,
                          n.chains = 3)
 
-# Sample from model 
+# Sample from model without x to check that convergence has happened
 jags.out   <- coda.samples (model = j.model,
                             variable.names = c("tau_add","tau_obs"),
-                            n.iter = 1000)
+                            n.iter = 5000)
 # See if convergence has happened
 plot(jags.out)
 
 jags.out   <- coda.samples (model = j.model,
                             variable.names = c("x","tau_add","tau_obs"),
-                            n.iter = 1000)
+                            n.iter = 5000)
 
-burnin = 100                                   ## determine convergence
+burnin = 1000                                   ## determine convergence
 jags.burn <- window(jags.out, start = burnin)  ## remove burn-in
 
 # Plot data and confidence interval
@@ -106,59 +106,13 @@ ecoforecastR::ciEnvelope(time,ci[1,],ci[3,],col=ecoforecastR::col.alpha("lightBl
 points(time,y,pch="+",cex=0.5) # add data points
 
 
-## HOURLY data 
-# Format data for model
-time <- hdat$Date
-y <- hdat$`Streamflow`
-data <- list(y= y,n=length(y),
-             x_ic=0.5,tau_ic=100, ## initial condition prior
-             a_obs=1,r_obs=1,           ## obs error prior
-             a_add=1,r_add=1)            ## process error prior
+# We need to withold some data for forecasting and validation
+# We will withhold the data from the start of 2024 by making streamflow data NA
+cal_ddat <- ddat |> mutate(`Streamflow Ave` = ifelse(Date < "2024-01-01", `Streamflow Ave`, NA))
+cal_hdat <- hdat |> mutate(`Streamflow` = ifelse(Date < "2024-01-01", `Streamflow`, NA))
 
-nchain = 3
-init <- list()
-for(i in 1:nchain){
-  y.samp = sample(y,length(y),replace=TRUE)
-  init[[i]] <- list(tau_add=1/var(diff(y.samp)),  ## initial guess on process precision
-                    tau_obs=5/var(y.samp))        ## initial guess on obs precision
-}
-
-# Run the model
-j.model   <- jags.model (file = textConnection(RandomWalk),
-                         data = data,
-                         inits = init,
-                         n.chains = 3)
-
-# Sample from model 
-jags.out   <- coda.samples (model = j.model,
-                            variable.names = c("tau_add","tau_obs"),
-                            n.iter = 1000)
-# See if convergence has happened
-plot(jags.out)
-
-jags.out   <- coda.samples (model = j.model,
-                            variable.names = c("x","tau_add","tau_obs"),
-                            n.iter = 1000)
-
-burnin = 100                                   ## determine convergence
-jags.burn <- window(jags.out, start = burnin)  ## remove burn-in
-
-# Plot data and confidence interval
-time.rng <- range(time)  # Use actual datetime range
-out <- as.matrix(jags.out)         # Convert from coda to matrix  
-x.cols <- grep("^x", colnames(out)) # Grab all columns that start with 'x'
-ci <- apply(out[,x.cols],2,quantile,c(0.025,0.5,0.975))
-
-# Plot base with POSIXct x-axis
-plot(time, ci[2, ], type = 'n', ylim = range(y, na.rm = TRUE), ylab = "Streamflow", xlim = time.rng, xaxt = 'n')
-
-# Use axis.POSIXct for better datetime formatting
-if (as.numeric(diff(time.rng), units = "days") < 100) {
-  axis.POSIXct(1, at = seq(time.rng[1], time.rng[2], by = "1 month"), format = "%Y-%m")
-} else {
-  axis.POSIXct(1, at = seq(time.rng[1], time.rng[2], by = "1 year"), format = "%Y")
-}
-ecoforecastR::ciEnvelope(time, ci[1, ], ci[3, ], col = ecoforecastR::col.alpha("lightBlue", 0.75)) # add confidence interval 
-points(time, y, pch = "+", cex = 0.5) # Add observed data
+# save the calibration data
+# write_csv(cal_ddat, "data/data_daily_calibration.csv")
+# write_csv(cal_hdat, "data/data_hourly_calibration.csv")
 
 
