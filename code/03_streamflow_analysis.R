@@ -32,8 +32,7 @@ hdat |> ggplot() +
 # print(exceedance_probability)
 
 
-# Start with a null time-series model using JAGS
-
+## Start with a null time-series model using JAGS
 # Define the model
 RandomWalk = "
 model{
@@ -55,6 +54,59 @@ model{
 }
 "
 
+## DAILY data 
+# Format data for model
+time <- ddat$Date
+y <- ddat$`Streamflow Ave`
+data <- list(y= y,n=length(y),
+             x_ic=0.5,tau_ic=100, ## initial condition prior
+             a_obs=1,r_obs=1,           ## obs error prior
+             a_add=1,r_add=1)            ## process error prior
+
+nchain = 3
+init <- list()
+for(i in 1:nchain){
+  y.samp = sample(y,length(y),replace=TRUE)
+  init[[i]] <- list(tau_add=1/var(diff(y.samp)),  ## initial guess on process precision
+                    tau_obs=5/var(y.samp))        ## initial guess on obs precision
+}
+
+# Run the model
+j.model   <- jags.model (file = textConnection(RandomWalk),
+                         data = data,
+                         inits = init,
+                         n.chains = 3)
+
+# Sample from model 
+jags.out   <- coda.samples (model = j.model,
+                            variable.names = c("tau_add","tau_obs"),
+                            n.iter = 1000)
+# See if convergence has happened
+plot(jags.out)
+
+jags.out   <- coda.samples (model = j.model,
+                            variable.names = c("x","tau_add","tau_obs"),
+                            n.iter = 1000)
+
+burnin = 100                                   ## determine convergence
+jags.burn <- window(jags.out, start = burnin)  ## remove burn-in
+
+# Plot data and confidence interval
+time.rng = c(1,length(time))       ## adjust to zoom in and out
+out <- as.matrix(jags.out)         ## convert from coda to matrix  
+x.cols <- grep("^x",colnames(out)) ## grab all columns that start with the letter x
+ci <- apply(out[,x.cols],2,quantile,c(0.025,0.5,0.975)) ## model was fit on log scale
+
+plot(time,ci[2,],type='n',ylim=range(y,na.rm=TRUE),ylab="Flu Index",xlim=time[time.rng])
+## adjust x-axis label to be monthly if zoomed
+if(diff(time.rng) < 100){ 
+  axis.Date(1, at=seq(time[time.rng[1]],time[time.rng[2]],by='month'), format = "%Y-%m")
+}
+ecoforecastR::ciEnvelope(time,ci[1,],ci[3,],col=ecoforecastR::col.alpha("lightBlue",0.75)) # add confidence interval 
+points(time,y,pch="+",cex=0.5) # add data points
+
+
+## HOURLY data 
 # Format data for model
 time <- hdat$Date
 y <- hdat$`Streamflow`
@@ -90,17 +142,23 @@ jags.out   <- coda.samples (model = j.model,
 
 burnin = 100                                   ## determine convergence
 jags.burn <- window(jags.out, start = burnin)  ## remove burn-in
-## check diagnostics post burn-in
 
-time.rng = c(1,length(time))       ## adjust to zoom in and out
-out <- as.matrix(jags.out)         ## convert from coda to matrix  
-x.cols <- grep("^x",colnames(out)) ## grab all columns that start with the letter x
-ci <- apply(exp(out[,x.cols]),2,quantile,c(0.025,0.5,0.975)) ## model was fit on log scale
+# Plot data and confidence interval
+time.rng <- range(time)  # Use actual datetime range
+out <- as.matrix(jags.out)         # Convert from coda to matrix  
+x.cols <- grep("^x", colnames(out)) # Grab all columns that start with 'x'
+ci <- apply(out[,x.cols],2,quantile,c(0.025,0.5,0.975))
 
-plot(time,ci[2,],type='n',ylim=range(y,na.rm=TRUE),ylab="Streamflow",log='y',xlim=time[time.rng])
-## adjust x-axis label to be monthly if zoomed
-if(diff(time.rng) < 100){ 
-  axis.Date(1, at=seq(time[time.rng[1]],time[time.rng[2]],by='month'), format = "%Y-%m")
+# Plot base with POSIXct x-axis
+plot(time, ci[2, ], type = 'n', ylim = range(y, na.rm = TRUE), ylab = "Streamflow", xlim = time.rng, xaxt = 'n')
+
+# Use axis.POSIXct for better datetime formatting
+if (as.numeric(diff(time.rng), units = "days") < 100) {
+  axis.POSIXct(1, at = seq(time.rng[1], time.rng[2], by = "1 month"), format = "%Y-%m")
+} else {
+  axis.POSIXct(1, at = seq(time.rng[1], time.rng[2], by = "1 year"), format = "%Y")
 }
-ecoforecastR::ciEnvelope(time,ci[1,],ci[3,],col=ecoforecastR::col.alpha("lightBlue",0.75))
-points(time,y,pch="+",cex=0.5)
+ecoforecastR::ciEnvelope(time, ci[1, ], ci[3, ], col = ecoforecastR::col.alpha("lightBlue", 0.75)) # add confidence interval 
+points(time, y, pch = "+", cex = 0.5) # Add observed data
+
+
