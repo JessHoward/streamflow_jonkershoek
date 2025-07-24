@@ -26,11 +26,14 @@ hdat |> ggplot() +
   xlab("Date") +
   ylab("Streamflow (Cubic metres per second)")
 
-# # Assume you have a vector of streamflows called 'streamflow'
-# threshold <- 4.076 # Example threshold
-# exceedance_probability <- 1 - pnorm(threshold, mean(streamflow$value, na.rm = T), sd(streamflow$value, na.rm = T))
-# print(exceedance_probability)
+# We need to withold some data for forecasting and validation
+# We will withhold the data from the start of 2024 by making streamflow data NA
+cal_ddat <- ddat |> mutate(`Streamflow Ave` = ifelse(Date < "2024-01-01", `Streamflow Ave`, NA))
+cal_hdat <- hdat |> mutate(`Streamflow` = ifelse(Date < "2024-01-01", `Streamflow`, NA))
 
+# save the calibration data
+# write_csv(cal_ddat, "data/data_daily_calibration.csv")
+# write_csv(cal_hdat, "data/data_hourly_calibration.csv")
 
 ## Start with a null time-series model using JAGS
 # Define the model
@@ -56,8 +59,8 @@ model{
 
 ## DAILY data 
 # Format data for model
-time <- ddat$Date
-y <- ddat$`Streamflow Ave`
+time <- cal_ddat$Date
+y <- cal_ddat$`Streamflow Ave`
 data <- list(y= y,n=length(y),
              x_ic=0.5,tau_ic=100, ## initial condition prior
              a_obs=1,r_obs=1,           ## obs error prior
@@ -97,22 +100,40 @@ out <- as.matrix(jags.out)         ## convert from coda to matrix
 x.cols <- grep("^x",colnames(out)) ## grab all columns that start with the letter x
 ci <- apply(out[,x.cols],2,quantile,c(0.025,0.5,0.975)) ## model was fit on log scale
 
-plot(time,ci[2,],type='n',ylim=range(y,na.rm=TRUE),ylab="Flu Index",xlim=time[time.rng])
+plot(time,ci[2,],type='n',ylim=range(y,na.rm=TRUE),ylab="Streamflow average",xlim=time[time.rng])
 ## adjust x-axis label to be monthly if zoomed
 if(diff(time.rng) < 100){ 
   axis.Date(1, at=seq(time[time.rng[1]],time[time.rng[2]],by='month'), format = "%Y-%m")
 }
 ecoforecastR::ciEnvelope(time,ci[1,],ci[3,],col=ecoforecastR::col.alpha("lightBlue",0.75)) # add confidence interval 
-points(time,y,pch="+",cex=0.5) # add data points
+# add data points
+included <- !is.na(y)
+heldout <- is.na(y)
+# Plot included data points (model saw these)
+points(time[included], y[included], pch="+", col='black', cex=0.6)  # filled black dots
+# Plot held-out data points (model did NOT see these)
+points(time[heldout], y[heldout], pch=1, col='red', cex=0.8)       # open red circles 
 
 
-# We need to withold some data for forecasting and validation
-# We will withhold the data from the start of 2024 by making streamflow data NA
-cal_ddat <- ddat |> mutate(`Streamflow Ave` = ifelse(Date < "2024-01-01", `Streamflow Ave`, NA))
-cal_hdat <- hdat |> mutate(`Streamflow` = ifelse(Date < "2024-01-01", `Streamflow`, NA))
-
-# save the calibration data
-# write_csv(cal_ddat, "data/data_daily_calibration.csv")
-# write_csv(cal_hdat, "data/data_hourly_calibration.csv")
-
-
+## Now let's see if we can add covariates to the model
+# We will use the daily rainfall data as a covariate but the 
+# Define the model
+RandomWalk = "
+model{
+  
+  #### Data Model
+  for(t in 1:n){
+    y[t] ~ dnorm(x[t],tau_obs)
+  }
+  
+  #### Process Model
+  for(t in 2:n){
+    x[t]~dnorm(x[t-1],tau_add)
+  }
+  
+  #### Priors
+  x[1] ~ dnorm(x_ic,tau_ic) ## priors on the initial conditions (since this is unknown)
+  tau_obs ~ dgamma(a_obs,r_obs) ## prior on observation error
+  tau_add ~ dgamma(a_add,r_add) ## prior on process error
+}
+"
