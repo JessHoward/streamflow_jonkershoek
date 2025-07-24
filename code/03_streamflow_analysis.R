@@ -47,7 +47,7 @@ model{
   
   #### Process Model (random walk)
   for(t in 2:n){
-    x[t] ~ dnorm(x[t-1],tau_add)
+    x[t] ~ dnorm(x[t-1], tau_add)
   }
 
   #### Priors
@@ -117,4 +117,77 @@ points(time[included], z[included], pch="+", col='black', cex=0.6)  # filled bla
 points(time[heldout], z[heldout], pch=1, col='red', cex=0.8)       # open red circles 
 
 ## Now let's see if we can add covariates to the model
-# We will use the daily rainfall data as a covariate but the 
+# We will use the daily rainfall data
+
+# Define the model
+
+Rainfall_RandomWalk <- "
+model{
+  
+  #### Data Model
+  for(t in 1:n){
+    y[t] ~ dnorm(x[t],tau_obs)
+  }
+  
+  #### Process Model (random walk)
+  for(t in 2:n){
+    x[t] ~ dnorm(x[t-1] + beta * c[t], tau_add)
+  }
+
+  #### Priors
+  x[1] ~ dnorm(x_ic, tau_ic)
+  beta ~ dnorm(0, 0.01) ## prior on the beta for rainfall
+  tau_obs ~ dgamma(a_obs,r_obs) ## prior on observation error
+  tau_add ~ dgamma(a_add,r_add) ## prior on process error
+}
+"
+
+# need to move previous day's rainfall to current day 
+rainfall_lag <- c(NA, cal_ddat$`Rainfall Total`[-length(cal_ddat$`Rainfall Total`)])
+rainfall_lag <- rainfall_lag[-(1:540)] # remove first 540 days since data is missing 
+rainfall_lag[is.na(rainfall_lag)] <- 0 # for now make NA values 0
+time <- cal_ddat$Date[-(1:540)] # remove first 540 days for dates to match rainfall lag data
+y <- cal_ddat$`Streamflow Ave`[-(1:540)] # remove first 540 days of streamflow to match rainfall lag data
+z <- ddat$`Streamflow Ave`[-(1:540)] # for plotting later
+
+
+data <- list(y=log(y),n=length(y),      ## data
+             c = rainfall_lag,  ## rainfall
+             x_ic=log(0.1),tau_ic=0.1,    ## initial condition prior
+             a_obs=1,r_obs=1,           ## obs error prior
+             a_add=1,r_add=1            ## process error prior
+)
+
+
+# Run the model
+j.model   <- jags.model (file = textConnection(Rainfall_RandomWalk),
+                         data = data,
+                         # inits = init,
+                         n.chains = 3)
+
+jags.out   <- coda.samples (model = j.model,
+                            variable.names = c("x","tau_add","tau_obs"),
+                            n.iter = 10000)
+
+burnin = 1000                                   ## determine convergence
+jags.burn <- window(jags.out, start = burnin)  ## remove burn-in
+
+# Plot data and confidence interval
+time.rng = c(1,length(time))       ## adjust to zoom in and out
+out <- as.matrix(jags.out)         ## convert from coda to matrix  
+x.cols <- grep("^x",colnames(out)) ## grab all columns that start with the letter x
+ci <- apply(exp(out[,x.cols]),2,quantile,c(0.025,0.5,0.975)) ## model was fit on log scale
+
+plot(time,ci[2,],type='n',ylim=range(y,na.rm=TRUE),ylab="Streamflow average", log='y', xlim=time[time.rng])
+## adjust x-axis label to be monthly if zoomed
+if(diff(time.rng) < 100){ 
+  axis.Date(1, at=seq(time[time.rng[1]],time[time.rng[2]],by='month'), format = "%Y-%m")
+}
+ecoforecastR::ciEnvelope(time,ci[1,],ci[3,],col=ecoforecastR::col.alpha("lightBlue",0.75)) # add confidence interval 
+# add data points
+included <- !is.na(y)
+heldout <- is.na(y)
+# Plot included data points (model saw these)
+points(time[included], z[included], pch="+", col='black', cex=0.6)  # filled black dots
+# Plot held-out data points (model did NOT see these)
+points(time[heldout], z[heldout], pch=1, col='red', cex=0.8)       # open red circles 
