@@ -30,7 +30,8 @@ ddat <- ddat %>%
       c(`Soil Moisture 30cm Max`, `Soil Moisture 20cm Max`, `Soil Moisture 10cm Max`,
         `Soil Moisture 30cm Min`, `Soil Moisture 20cm Min`, `Soil Moisture 10cm Min`),
       ~ ifelse(. < 1 | Date < as.Date("2015-01-01"), NA, .)
-    )
+    ),
+    `Streamflow Ave` = ifelse(`Streamflow Ave` < 0.01, NA, `Streamflow Ave`)
   )
 ## Potentially problematic values: max and min humidity values of 100
 
