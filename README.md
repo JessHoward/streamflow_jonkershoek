@@ -604,7 +604,8 @@ for(i in 1:ncol(stream)){
 png("img/valid7", width = 1200, height = 800, res = 150)
 ```
 
-# Acknowlegdements
+<img src="img/taylor_diagram.png" width="1200" style="display: block; margin: auto;" />
+\# Acknowlegdements
 
 <img src="img/saeon_hex.png" width="80%" style="display: block; margin: auto;" />
 

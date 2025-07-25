@@ -669,7 +669,9 @@ for(i in 1:ncol(stream)){
 png("img/valid7", width = 1200, height = 800, res = 150)
 ```
 
-
+```{r, echo=FALSE, fig.align='center'}
+knitr::include_graphics("img/taylor_diagram.png")
+```
 # Acknowlegdements
 
 ```{r, echo=FALSE, out.width='80%', fig.align='center'}
