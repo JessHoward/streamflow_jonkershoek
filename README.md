@@ -1,92 +1,11 @@
 
 <!-- README.md is generated from README.Rmd. Please edit that file -->
 
-# Jonkershoek streamflow and flood events
+# Jonkershoek streamflow forecasting
 
-<!-- badges: start -->
+## Team members
 
-<!-- badges: end -->
-
-## Project Description
-
-The goal of `streamflow_jonkershoek` is to set up a project focused on
-forecasting flood events in the Jonkershoek valley, South Africa, for
-the near-term ecological forecasting course run by the African Chapter
-of the Ecological Forecasting Initiative, Ecoforecast Africa
-(<https://ecoforecast.africa/>). See
-<https://ecoforecast.africa/events/>.
-
-## Data Overview
-
-Streamflow, weather and soil moisture data are from the South African
-Environmental Observation Network (SAEON). The project will focus on
-streamflow data from the Langrivier gauging weir and weather and soil
-moisture data from the high altitude automated weather station at
-Dwarsberg. These observations are part of the Jonkershoek long term
-study site run by the SAEON Fynbos Node (<https://fynbos.saeon.ac.za/>).
-The site has a long history of environmental observations, starting with
-a multiple catchment experiment in the 1940s. More details are available
-in Slingsby et al. 2021. Jonkershoek: Africa’s Oldest Catchment
-Experiment ‐ 80 Years and Counting. Hydrological Processes,
-<https://doi.org/10.1002/hyp.14101>.
-
-For this project we are focusing only on data collected since SAEON took
-over observations at this site and set up automated logging instruments.
-Using older records (back to the 1930s in some cases) requires dealing
-with changes in instrumentation, recording frequency, etc. The data
-we’ll use run from from 2011-08-24 to the near-present for streamflow,
-and 2013-03-03 to the near-present for weather and soil moisture.
-
-<figure>
-<img src="img/jonkershoek_weir.jpg"
-alt="A typical v-notch weir at Jonkershoek. For the purposes of this forecast a flood is defined as an event where the stream height rises above the wall of the weir. For the Langrivier weir, this occurs when streamflow exceeds 4.076 cumecs." />
-<figcaption aria-hidden="true">A typical v-notch weir at Jonkershoek.
-For the purposes of this forecast a flood is defined as an event where
-the stream height rises above the wall of the weir. For the Langrivier
-weir, this occurs when streamflow exceeds 4.076 cumecs.</figcaption>
-</figure>
-
-For live weather data and the record over the past month you can access
-the [Dwarsberg weather station
-directly](http://lognet.saeon.ac.za:8088/Dwarsberg/index.html)
-
-### Data download and cleaning
-
-<img src="img/saeon_hex.png" style="width:15.0%" />
-
-The data were downloaded from the SAEON Observations Database
-(<https://observations.saeon.ac.za/>) using the `saeonobsr` R package.
-To use this service you need to register for an account and obtain an
-API access token. See `code/01_download_SAEON_data.R` for details on how
-to set up the token, download, clean and merge the data. Unfortunately,
-the data are currently only updated monthly and are not yet available
-via API access in near-real time. The data can also be “manually”
-downloaded from <https://observationsmonitor.saeon.ac.za/> (after
-registering for an account).
-
-The data are stored in the `data` folder in this repository. The raw
-downloaded data files are not kept because they are too big to store in
-a github repo. The cleaned and merged data are stored in the `data`
-folder.
-
-## Getting Started
-
-1.  Clone this repo (for help see this
-    [tutorial](https://help.github.com/articles/cloning-a-repository/)).
-2.  Raw Data is in the `data` folder within this repo.
-3.  Data download and processing/transformation scripts are in the
-    `code` folder.
-4.  etc…
-
-## Software Requirements
-
-This project uses R and the following packages:
-
-- `saeonobsr` for accessing SAEON data (see
-  <https://github.com/GMoncrieff/saeonobsr>)
-- `tidyverse` for data manipulation and visualization
-
-## Some data exploration (and code to get you started)
+Jess Howard, Jess Prevôst, Nicola Bredenkamp, Vernon Visser.
 
 ``` r
 library(tidyverse)
@@ -95,218 +14,598 @@ library(tidyverse)
 #> ✔ forcats   1.0.0     ✔ stringr   1.5.1
 #> ✔ ggplot2   3.5.2     ✔ tibble    3.3.0
 #> ✔ lubridate 1.9.4     ✔ tidyr     1.3.1
-#> ✔ purrr     1.0.4     
+#> ✔ purrr     1.1.0     
 #> ── Conflicts ────────────────────────────────────────── tidyverse_conflicts() ──
 #> ✖ dplyr::filter() masks stats::filter()
 #> ✖ dplyr::lag()    masks stats::lag()
 #> ℹ Use the conflicted package (<http://conflicted.r-lib.org/>) to force all conflicts to become errors
+library(rjags)
+#> Loading required package: coda
+#> Linked to JAGS 4.3.2
+#> Loaded modules: basemod,bugs
+library(plotrix)
+library(knitr)
+```
+
+## Introduction
+
+    #> Rows: 4839 Columns: 15
+    #> ── Column specification ────────────────────────────────────────────────────────
+    #> Delimiter: ","
+    #> dbl  (14): Streamflow Ave, Air Temperature Max, Air Temperature Min, Rainfal...
+    #> date  (1): Date
+    #> 
+    #> ℹ Use `spec()` to retrieve the full column specification for this data.
+    #> ℹ Specify the column types or set `show_col_types = FALSE` to quiet this message.
+
+<img src="README_files/figure-gfm/unnamed-chunk-2-1.png" style="display: block; margin: auto;" />
+
+Our project assessed daily streamflow in the Jonkershoek catchment in
+relation to daily rainfall.
+
+<img src="img/jonkershoek_old.jpg" width="80%" style="display: block; margin: auto;" />
+
+Jonkershoek is an old forestry site where many catchments are
+compromised by alien pine trees. Our catchment is outside of the
+plantations and represents a control site.
+
+<img src="img/jonkershoek_weir.jpg" width="80%" style="display: block; margin: auto;" />
+
+This is the weir at which streamflow was measured.
+
+## Step 1: Data Cleaning
+
+Data cleaning and exploratory visualization was performed on the daily
+streamflow data. Invalid or unrealistic values were converted to NA
+(negative temperatures below -50°C, humidity values that were zero or
+exceed realistic bounds, soil moisture readings that were too low or
+predate 2015, and streamflow values below 0.01). The data was reshaped
+into long format to visualize the temporal patterns and assess data
+quality. The cleaned daily streamflow datasets were saved as new .csv
+files for use in other code scripts.
+
+## Step 2: Null State-space Model using JAGS
+
+Withhold the data from the start of 2024 by making the streamflow data
+NA for the forecasting and validation steps.The calibration data was
+saved as a .csv file called “cal_ddat”. The dates before 2013-03-16
+where there is no rainfall data were removed. A one day set back lag was
+assumed between the rain falling and the streamflow increase.
+
+``` r
+
+# Withhold data
+cal_ddat <- ddat |> mutate(`Streamflow Ave` = ifelse(Date < "2024-01-01", `Streamflow Ave`, NA)) %>%
+  filter(Date > "2013-03-16") # remove dates before 2013-03-16 where no rainfall data
+# Remove dates before 2013-03-16 where there is no rainfall data
+ddat <- ddat %>%
+  filter(Date > "2013-03-16") 
+
+# Need to move previous day's rainfall to current day 
+cal_ddat <- cal_ddat %>%
+  mutate(rainfall_dayback = lag(`Rainfall Total`, 1))
+```
+
+Data for the model was assigned.
+
+``` r
+
+# Format data for model
+time <- cal_ddat$Date
+y <- cal_ddat$`Streamflow Ave`
+z <- ddat$`Streamflow Ave` # for plotting later
+y_log <- log(y)
+y_log[is.infinite(y_log)] <- NA
+```
+
+The null time-series model was determined and defined, then the model
+was called through JAGS and run.
+
+``` r
+
+# Define the model
+RandomWalk <- "
+model{
+  
+  #### Data Model
+  for(t in 1:n){
+    y[t] ~ dnorm(x[t],tau_obs)
+  }
+  
+  #### Process Model (random walk)
+  for(t in 2:n){
+    x[t] ~ dnorm(x[t-1], tau_add)
+  }
+
+  #### Priors
+  x[1] ~ dnorm(x_ic, tau_ic)
+  tau_obs ~ dgamma(a_obs,r_obs) ## prior on observation error
+  tau_add ~ dgamma(a_add,r_add) ## prior on process error
+}
+"
+
+data <- list(y=y_log,n=length(y),      ## data
+             x_ic=log(0.1),tau_ic=0.1,    ## initial condition prior
+             a_obs=1,r_obs=1,           ## obs error prior
+             a_add=1,r_add=1            ## process error prior
+)
+
+nchain = 3
+# init <- list()
+# for(i in 1:nchain){
+#   y.samp = sample(y,length(y),replace=TRUE)
+#   init[[i]] <- list(tau_add=1/var(diff(log(y.samp))),  ## initial guess on process precision
+#                     tau_obs=5/var(log(y.samp)))        ## initial guess on obs precision
+
+# Run the model
+j.model   <- jags.model (file = textConnection(RandomWalk),
+                         data = data,
+                         # inits = init,
+                         n.chains = 3)
+```
+
+The convergence was the checked.
+
+``` r
+
+# Sample from model without x to check that convergence has happened
+jags.out   <- coda.samples (model = j.model,
+                            variable.names = c("tau_add","tau_obs"),
+                            n.iter = 5000)
+
+# See if convergence has happened
+png("img/jags_traceplot_random_walk.png", width = 1200, height = 800, res = 150)
+plot(jags.out) # traceplot and density check
+dev.off() 
+```
+
+<img src="img/jags_traceplot_random_walk.png" width="1200" style="display: block; margin: auto;" />
+
+The random-walk model was checked, and the data and confidence intervals
+were visualized.
+
+``` r
+
+#Sample the model
+jags.out   <- coda.samples (model = j.model,
+                            variable.names = c("x","tau_add","tau_obs"),
+                            n.iter = 10000)
+
+burnin = 1000                                   ## determine convergence
+jags.burn <- window(jags.out, start = burnin)  ## remove burn-in
+
+# Plot data and confidence interval
+time.rng = c(1,length(time))       ## adjust to zoom in and out
+out <- as.matrix(jags.out)         ## convert from coda to matrix  
+x.cols <- grep("^x",colnames(out)) ## grab all columns that start with the letter x
+ci <- apply(exp(out[,x.cols]),2,quantile,c(0.025,0.5,0.975)) ## model was fit on log scale
+
+png("img/forecast_random_walk.png", width = 1200, height = 800, res = 150)
+
+plot(time,ci[2,],type='n',ylim=range(y,na.rm=TRUE),ylab="Streamflow average", log='y', xlim=time[time.rng])
+## adjust x-axis label to be monthly if zoomed
+if(diff(time.rng) < 100){ 
+  axis.Date(1, at=seq(time[time.rng[1]],time[time.rng[2]],by='month'), format = "%Y-%m")
+}
+ecoforecastR::ciEnvelope(time,ci[1,],ci[3,],col=ecoforecastR::col.alpha("lightBlue",0.75)) # add confidence interval 
+# add data points
+included <- !is.na(y)
+heldout <- is.na(y)
+# Plot included data points (model saw these)
+points(time[included], y[included], pch="+", col='black', cex=0.6)  # filled black dots
+# Plot held-out data points (model did NOT see these)
+points(time[heldout], z[heldout], pch=1, col='red', cex=0.8)       # open red circles 
+
+dev.off() 
+```
+
+<img src="img/forecast_random_walk.png" width="1200" style="display: block; margin: auto;" />
+
+## Step 3: Identifying the Co-variate
+
+<img src="img/correlations_scatterplot.png" width="1889" style="display: block; margin: auto;" />
+
+## Step 4: Adding the Co-variates to the Model
+
+``` r
+
+# Call the daily rainfall data used
+rainfall_lag <- cal_ddat$rainfall_dayback 
+rainfall_lag[is.na(rainfall_lag)] <- 0 # for now make NA values 0
+
+
+# Define the model
+Rainfall_RandomWalk <- "
+model{
+  
+  #### Data Model
+  for(t in 1:n){
+    y[t] ~ dnorm(x[t],tau_obs)
+  }
+  
+  #### Process Model (random walk)
+  for(t in 2:n){
+    x[t] ~ dnorm(x[t-1] + beta * c[t], tau_add)
+  }
+
+  #### Priors
+  x[1] ~ dnorm(x_ic, tau_ic)
+  beta ~ dnorm(0, 0.01) ## prior on the beta for rainfall
+  tau_obs ~ dgamma(a_obs,r_obs) ## prior on observation error
+  tau_add ~ dgamma(a_add,r_add) ## prior on process error
+}
+"
+
+data <- list(y=y_log,n=length(y),      ## data
+             c = rainfall_lag,  ## rainfall
+             x_ic=log(0.1),tau_ic=0.1,    ## initial condition prior
+             a_obs=1,r_obs=1,           ## obs error prior
+             a_add=1,r_add=1            ## process error prior
+)
+
+
+# Run the model
+j.model   <- jags.model (file = textConnection(Rainfall_RandomWalk),
+                         data = data,
+                         # inits = init,
+                         n.chains = 3)
+
+jags.out   <- coda.samples (model = j.model,
+                            variable.names = c("x","tau_add","tau_obs"),
+                            n.iter = 10000)
+
+burnin = 1000                                   ## determine convergence
+jags.burn <- window(jags.out, start = burnin)  ## remove burn-in
+```
+
+The rainfall data and confidence interval was visualized.
+
+``` r
+
+# Plot data and confidence interval
+time.rng = c(1,length(time))       ## adjust to zoom in and out
+out <- as.matrix(jags.out)         ## convert from coda to matrix  
+x.cols <- grep("^x",colnames(out)) ## grab all columns that start with the letter x
+ci <- apply(exp(out[,x.cols]),2,quantile,c(0.025,0.5,0.975)) ## model was fit on log scale
+
+png("img/forecast_Rainfall.png", width = 1200, height = 800, res = 150)
+
+plot(time,ci[2,],type='n',ylim=range(y,na.rm=TRUE),ylab="Streamflow average", log='y', xlim=time[time.rng])
+## adjust x-axis label to be monthly if zoomed
+if(diff(time.rng) < 100){ 
+  axis.Date(1, at=seq(time[time.rng[1]],time[time.rng[2]],by='month'), format = "%Y-%m")
+}
+ecoforecastR::ciEnvelope(time,ci[1,],ci[3,],col=ecoforecastR::col.alpha("lightBlue",0.75)) # add confidence interval 
+# add data points
+included <- !is.na(y)
+heldout <- is.na(y)
+# Plot included data points (model saw these)
+points(time[included], y[included], pch="+", col='black', cex=0.6)  # filled black dots
+# Plot held-out data points (model did NOT see these)
+points(time[heldout], z[heldout], pch=1, col='red', cex=0.8)       # open red circles 
+
+dev.off() 
+```
+
+<img src="img/forecast_Rainfall.png" width="1200" style="display: block; margin: auto;" />
+
+## Step 5: Forecast the Streamflow Daily Data
+
+The missing rainfall data was modeled and a seasonality component added
+to the model.
+
+``` r
+
+#Add a seasonality component
+doy <- as.numeric(format(time, "%j")) / 365  # day of year scaled 0–1
+season_sin <- sin(2 * pi * doy)
+season_cos <- cos(2 * pi * doy)
+
+#Identify missing values in rainfall
+rain <- cal_ddat$rainfall_dayback
+
+# Track missing rainfall values
+is_na_rain <- is.na(rain)
+n_missing <- sum(is_na_rain)
+missing_idx <- which(is_na_rain)
+```
+
+The model was defined and run through JAGS.
+
+``` r
+
+RandomWalk_rain_decay <- "
+model {
+
+  # Observation model
+  for(t in 1:n){
+    y[t] ~ dnorm(x[t], tau_obs)
+  }
+
+  # Process model with autoregressive decay and covariates
+  for(t in 2:n){
+    mu[t] <- mu0 + beta_decay * (x[t-1] - mu0) + 
+             beta_rain * rain[t] + 
+             beta_season_sin * season_sin[t] + 
+             beta_season_cos * season_cos[t]
+    
+    x[t] ~ dnorm(mu[t], tau_add)
+  }
+
+  # Impute missing rain values
+  for(i in 1:n_missing){
+    rain[missing_idx[i]] ~ dnorm(mu_rain, tau_rain)
+  }
+
+  # Priors
+  mu0 ~ dnorm(0, 0.001)                     # Mean log-streamflow level
+  x[1] ~ dnorm(mu0, tau_ic)                 # Initial latent state
+  
+  tau_obs ~ dgamma(a_obs, r_obs)            # Observation error
+  tau_add ~ dgamma(a_add, r_add)            # Process error
+
+  beta_decay ~ dunif(0, 1)                  # AR(1) coefficient bounded for stability
+  beta_rain ~ dnorm(0, 0.01)
+  beta_season_sin ~ dnorm(0, 0.01)
+  beta_season_cos ~ dnorm(0, 0.01)
+
+  mu_rain ~ dnorm(0, 0.01)                  # Mean log-rainfall for imputation
+  tau_rain ~ dgamma(1, 1)                   # Rainfall imputation variance
+}
+"
+
+data <- list(
+  y = y_log,
+  rain = log(rain+1),               # vector with NAs
+  missing_idx = missing_idx,     # indices to impute
+  n_missing = n_missing,         # how many to impute
+  n = length(y),
+  #  x_ic = log(0.1),
+  tau_ic = 0.1,
+  a_obs = 1,
+  r_obs = 1,
+  a_add = 1,
+  r_add = 1, 
+  season_sin = season_sin,      
+  season_cos = season_cos )
+
+# Run the model
+j.model <- jags.model(file = textConnection(RandomWalk_rain_decay),
+                      data = data,
+                      n.chains = 3)
+```
+
+The convergence was checked.
+
+``` r
+
+# Full posterior sampling
+jags.out <- coda.samples(model = j.model,
+                         variable.names = c("x", "tau_add", "tau_obs", "beta_rain", "beta_decay", "mu_rain", "tau_rain", "rain"),,
+                         n.iter = 5000)
+
+
+# Remove burn-in
+burnin <- 1000
+jags.burn <- window(jags.out, start = burnin)
+```
+
+The ouput of the model was visualized.
+
+``` r
+
+# Plot data and confidence interval
+time.rng = c(1,length(time))       ## adjust to zoom in and out
+out <- as.matrix(jags.out)         ## Convert MCMC output to matrix
+x.cols <- grep("^x",colnames(out)) ## grab all columns that start with the letter x
+ci <- apply(exp(out[,x.cols]),2,quantile,c(0.025,0.5,0.975)) ## model was fit on log scale
+
+# Let's plot just the last year before predicting
+forecast_start <- as.Date("2024-01-01") # Define the start of the forecast period
+forecast_end <- max(time, na.rm = TRUE)  # Adjust if you want a specific cutoff
+plot_start <- forecast_start - 365
+
+# Logical vector to subset the full time range
+plot_range <- time >= plot_start & time <= forecast_end
+
+plot(time[plot_range], ci[2, plot_range], type = 'n',
+     ylim = range(y, na.rm = TRUE),
+     ylab = "Streamflow average (m³/s)",
+     log = 'y',
+     xlim = c(plot_start, forecast_end),
+     xlab = "Date",
+     main = "Forecast with Rainfall + Seasonality + Decay")
+# Confidence envelope
+ecoforecastR::ciEnvelope(time[plot_range], ci[1, plot_range], ci[3, plot_range],
+                         col = ecoforecastR::col.alpha("lightblue", 0.75))
+
+# Mean forecast line (for forecast period only)
+forecast_period <- time >= forecast_start
+lines(time[forecast_period], ci[2, forecast_period], col = "blue", lwd = 2)
+
+# Observed data points
+included <- !is.na(y)
+points(time[plot_range & included], y[plot_range & included], pch = "+", col = 'black', cex = 0.6)
+
+# Held-out points
+heldout <- is.na(y) & time >= as.Date("2024-01-01")
+points(time[plot_range & heldout], z[plot_range & heldout], pch = 1, col = 'red', cex = 0.8)
+
+png("img/forecast_rain_decay.png", width = 1200, height = 800, res = 150)
+
+dev.off()
+```
+
+<img src="img/forecast_rain_decay.png" width="1200" style="display: block; margin: auto;" />
+
+## Step 6: Validate Against the Held Out Data
+
+``` r
+##### Data validation
+# Posterior predictions of x (latent state)
+x_cols <- grep("^x\\[", colnames(out))
+x_post <- exp(out[, x_cols])  # back-transform from log-scale
+x_med <- apply(x_post, 2, median)
+x_mean <- apply(x_post, 2, mean)
+
+# Only for observed data
+resids <- y[included] - x_med[included]
+
+# Root Mean Squared Error
+rmse <- sqrt(mean(resids^2))
+
+# R-squared (squared correlation between observed and predicted)
+r2 <- cor(y[included], x_med[included])^2
+
+validation_metrics <- data.frame(
+  Metric = c("RMSE", "R-squared"),
+  Value = c(round(rmse, 3), round(r2, 3))
+)
+
+knitr::kable(validation_metrics, caption = "Model validation metrics: streamflow with rainfall, seasonality, and decay")
+dev.off()
 ```
 
 ``` r
-# Read hourly metadata and display
-hmdat <- read_csv("data/metadata_hourly_2025-07-09.csv")
-#> Rows: 8 Columns: 3
-#> ── Column specification ────────────────────────────────────────────────────────
-#> Delimiter: ","
-#> chr (3): phenomenon, offering, unit
-#> 
-#> ℹ Use `spec()` to retrieve the full column specification for this data.
-#> ℹ Specify the column types or set `show_col_types = FALSE` to quiet this message.
+### Identify held out data
+heldout.idx <- which(heldout)
 
-hmdat
-#> # A tibble: 8 × 3
-#>   phenomenon         offering              unit             
-#>   <chr>              <chr>                 <chr>            
-#> 1 Streamflow         Average               Cumecs           
-#> 2 Air Temperature    Average               Degrees Celsius  
-#> 3 Rainfall           Total Hourly rainfall Millimeter       
-#> 4 Relative Humidity  Average               Percent          
-#> 5 Soil Moisture 20cm Average               Percent          
-#> 6 Soil Moisture 10cm Average               Percent          
-#> 7 Soil Moisture 30cm Average               Percent          
-#> 8 Wind Speed         Average               Meters per second
+### Extract modelled predictions for held out data
+x.heldout.cols <- x.cols[heldout.idx]
+ci.heldout <- apply(exp(out[, x.heldout.cols]), 2, quantile, c(0.025, 0.5, 0.975))
+
+
+#### Compare predictions versus observed
+validation_df <- data.frame(
+  Date = time[heldout.idx],
+  Observed = y_full[heldout.idx],         # Use full streamflow log here
+  Predicted_median = ci.heldout[2,],
+  Predicted_lower = ci.heldout[1,],
+  Predicted_upper = ci.heldout[3,]
+)
+
+knitr::kable(head(validation_df, 10), 
+             digits = 3, 
+             caption = "Comparison of Model Predictions to Held-Out Observations")
 ```
 
 ``` r
-# Read daily metadata and display
-dmdat <- read_csv("data/metadata_daily_2025-07-09.csv")
-#> Rows: 14 Columns: 4
-#> ── Column specification ────────────────────────────────────────────────────────
-#> Delimiter: ","
-#> chr (4): phenomenon, offering, unit, offeringshort
-#> 
-#> ℹ Use `spec()` to retrieve the full column specification for this data.
-#> ℹ Specify the column types or set `show_col_types = FALSE` to quiet this message.
+# Remove any rows with missing values (just in case)
+valid_data <- na.omit(validation_df)
 
-dmdat
-#> # A tibble: 14 × 4
-#>    phenomenon         offering             unit              offeringshort
-#>    <chr>              <chr>                <chr>             <chr>        
-#>  1 Streamflow         Average              Cumecs            Ave          
-#>  2 Air Temperature    Daily Maximum        Degrees Celsius   Max          
-#>  3 Air Temperature    Daily Minimum        Degrees Celsius   Min          
-#>  4 Rainfall           Total Daily Rainfall Millimeter        Total        
-#>  5 Relative Humidity  Daily Maximum        Percent           Max          
-#>  6 Relative Humidity  Daily Minimum        Percent           Min          
-#>  7 Soil Moisture 30cm Daily Maximum        Percent           Max          
-#>  8 Soil Moisture 10cm Daily Maximum        Percent           Max          
-#>  9 Soil Moisture 20cm Daily Maximum        Percent           Max          
-#> 10 Soil Moisture 30cm Daily Minimum        Percent           Min          
-#> 11 Soil Moisture 20cm Daily Minimum        Percent           Min          
-#> 12 Soil Moisture 10cm Daily Minimum        Percent           Min          
-#> 13 Wind Speed         Average Daily        Meters per second Ave          
-#> 14 Wind Speed         Daily Maximum        Meters per second Max
+# Extract observed and predicted vectors
+obs <- valid_data$Observed
+pred <- valid_data$Predicted_median
+
+# Calculate R-squared
+rsq <- cor(obs, pred)^2
+rmse <- sqrt(mean((obs - pred)^2))
+
+validation_metrics <- data.frame(
+  Metric = c("RMSE", "R-squared"),
+  Value = c(round(rmse, 3), round(rsq, 3))
+)
+
+knitr::kable(validation_metrics, 
+             caption = "Validation Metrics on Held-Out Data")
 ```
 
 ``` r
-# Read hourly data
-hdat <- read_csv("data/data_hourly_2025-07-09.csv")
-#> Rows: 115413 Columns: 9
-#> ── Column specification ────────────────────────────────────────────────────────
-#> Delimiter: ","
-#> dbl  (8): Streamflow, Air Temperature, Rainfall, Relative Humidity, Soil Moi...
-#> dttm (1): Date
-#> 
-#> ℹ Use `spec()` to retrieve the full column specification for this data.
-#> ℹ Specify the column types or set `show_col_types = FALSE` to quiet this message.
+## outputs on non-log data
 
-# Read daily data
-ddat <- read_csv("data/data_daily_2025-07-09.csv")
-#> Rows: 4839 Columns: 15
-#> ── Column specification ────────────────────────────────────────────────────────
-#> Delimiter: ","
-#> dbl  (14): Streamflow Ave, Air Temperature Max, Air Temperature Min, Rainfal...
-#> date  (1): Date
-#> 
-#> ℹ Use `spec()` to retrieve the full column specification for this data.
-#> ℹ Specify the column types or set `show_col_types = FALSE` to quiet this message.
+obs_real <- exp(valid_data$Observed)
+pred_real <- valid_data$Predicted_median  # Already in real scale
+
+rsq_real <- cor(obs_real, pred_real)^2
+rmse_real <- sqrt(mean((obs_real - pred_real)^2))
+
+validation_metrics_real <- data.frame(
+  Metric = c("RMSE (real scale)", "R-squared (real scale)"),
+  Value = c(round(rmse_real, 3), round(rsq_real, 3))
+)
+
+knitr::kable(validation_metrics_real, 
+             caption = "Validation on Held-Out Data (Real Scale)")
 ```
 
 ``` r
-# Pivot longer and visualize the daily data
+###Plotting outputs
+# Add a tiny jitter to zero or near-zero values to avoid log(0)
+jitter_amount <- 1e-6
 
-ddat |>
-  pivot_longer(cols = -c(Date),
-               names_to = "phenomenon",
-               values_to = "value") |>
-  ggplot(aes(x = Date, y = value)) +
-  geom_line() +
-  facet_wrap(~phenomenon, scales = "free") +
-  labs(title = "Daily Data",
-       x = "Date",
-       y = "Value") +
+valid_data <- validation_df %>%
+  mutate(Observed_real = exp(Observed),
+         Observed_jittered = ifelse(Observed_real <= 0, 1e-6, Observed_real),
+         Predicted_jittered = ifelse(Predicted_median <= 0, 1e-6, Predicted_median),
+         Observed_log = log10(Observed_jittered),
+         Predicted_log = log10(Predicted_jittered))
+
+valid_data$Predicted_log <- log10(valid_data$Predicted_median + 1e-6)
+
+#linear scale streamflow
+ggplot(valid_data, aes(x = Observed_real, y = Predicted_median)) +
+  geom_point(alpha = 0.6, color = "steelblue") +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "red") +
+  labs(
+    x = "Observed Streamflow (m³/s)",
+    y = "Predicted Streamflow (m³/s)",
+    title = "Observed vs Predicted Streamflow (Linear Scale)"
+  ) +
   theme_minimal()
-#> Warning: Removed 527 rows containing missing values or values outside the scale range
-#> (`geom_line()`).
+
+png("img/valid5", width = 1200, height = 800, res = 150)
 ```
 
-![](README_files/figure-gfm/unnamed-chunk-2-1.png)<!-- -->
-
-Looks like there are some odd values and missing data we’ll need to
-clean up.
-
-What about the hourly data?
+<img src="img/valid5.png" width="1200" style="display: block; margin: auto;" />
 
 ``` r
-# Pivot longer and visualize the hourly data
-
-hdat |>
-  pivot_longer(cols = -c(Date),
-               names_to = "phenomenon",
-               values_to = "value") |>
-  ggplot(aes(x = Date, y = value)) +
-  geom_line() +
-  facet_wrap(~phenomenon, scales = "free") +
-  labs(title = "Hourly Data",
-       x = "Date",
-       y = "Value") +
+#log_scale
+ggplot(valid_data, aes(x = Observed_log, y = Predicted_log)) +
+  geom_point(alpha = 0.6, color = "darkgreen") +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "red") +
+  labs(
+    x = "log10(Observed Streamflow)",
+    y = "log10(Predicted Streamflow)",
+    title = "Observed vs Predicted Streamflow (Log10 Scale)"
+  ) +
   theme_minimal()
-#> Warning: Removed 12478 rows containing missing values or values outside the scale range
-#> (`geom_line()`).
+
+png("img/valid6", width = 1200, height = 800, res = 150)
 ```
 
-![](README_files/figure-gfm/unnamed-chunk-3-1.png)<!-- -->
-
-Ok, let’s look at the occurrence of floods as defined by the streamflow
-exceeding 4.076 cubic metres per second (cumecs) at the Langrivier weir.
-This is the height of the wall of the weir, so when the streamflow
-exceeds this value we could consider it a flood event.
+<img src="img/valid6.png" width="1200" style="display: block; margin: auto;" />
 
 ``` r
+### Add Taylor plot
+Observed <- validation_df$Observed
+Predicted <- validation_df$Predicted_median
+# Step 1: Clean / filter
+qaqc <- complete.cases(Observed, Predicted)  # OR: qaqc <- !is.na(Observed) & !is.na(Predicted)
 
-ddat |> ggplot() +
-  geom_line(aes(y = `Streamflow Ave`, x = as.Date(Date))) +
-  geom_hline(aes(yintercept = 4.076)) +
-  ggtitle("Langrivier daily streamflow") +
-  xlab("Date") +
-  ylab("Streamflow (Cubic metres per second)")
+O <- Observed[qaqc]
+E <- Predicted[qaqc]
+
+# Step 2: Simulate ensemble matrix if you don't already have one
+set.seed(123)
+n_draws <- 100
+jitter_sd <- sd(E - O, na.rm = TRUE)
+
+stream <- replicate(n_draws, E + rnorm(length(E), 0, jitter_sd))
+
+# Step 3: Taylor diagram
+taylor.diagram(ref = O, model = E, normalize = TRUE, ref.sd = TRUE, col = "blue", pch = 16)
+
+# Step 4: Add ensemble members
+for(i in 1:ncol(stream)){
+  taylor.diagram(ref = O, model = stream[, i],
+                 col = rgb(1, 0, 0, 0.3), pch = ".", add = TRUE, normalize = TRUE)
+}
+
+png("img/valid7", width = 1200, height = 800, res = 150)
 ```
 
-![](README_files/figure-gfm/floodsdaily-1.png)<!-- -->
+# Acknowlegdements
 
-Interestingly, the daily data shows that the streamflow has never
-maintained an average flow above our flood threshold for an entire day.
+<img src="img/saeon_hex.png" width="80%" style="display: block; margin: auto;" />
 
-Now let’s look at the hourly data.
-
-``` r
-
-hdat |> ggplot() +
-  geom_line(aes(y = `Streamflow`, x = as.Date(Date))) +
-  geom_hline(aes(yintercept = 4.076)) +
-  ggtitle("Langrivier hourly streamflow") +
-  xlab("Date") +
-  ylab("Streamflow (Cubic metres per second)")
-```
-
-![](README_files/figure-gfm/floodshourly-1.png)<!-- -->
-
-``` r
-# # Assume you have a vector of streamflows called 'streamflow'
-# threshold <- 4.076 # Example threshold
-# exceedance_probability <- 1 - pnorm(threshold, mean(streamflow$value, na.rm = T), sd(streamflow$value, na.rm = T))
-# print(exceedance_probability)
-```
-
-``` r
-# ###Get soil moisture data
-# fls <- list.files("/Users/glenn/Documents/data/jonkershoek/Soil moisture/", pattern = "Dwarsberg hourly VWC", full.names = T)
-# 
-# fls <- lapply(fls, read.csv, header = T)
-# 
-# ###Fix date
-# fixdate <- function(x){
-# y <- gsub("T", " ", x$Date)
-# y <- gsub("+02:00", "", y, fixed=T)
-# y <- gsub(".000", "", y, fixed=T)
-# x$Date <- as.POSIXct(strptime(y, format = "%Y-%m-%d %H:%M:%S", tz="Africa/Johannesburg"))
-# return(x)
-# }
-# 
-# fls <- lapply(fls, fixdate)
-# 
-# ###Add depth column
-# fls[[1]]$Depth <- -10
-# fls[[2]]$Depth <- -30
-# fls[[3]]$Depth <- -30
-# fls[[4]]$Depth <- -20
-# fls[[5]]$Depth <- -20
-# fls[[6]]$Depth <- -10
-# 
-# ###Extract from list into one data.frame
-# dat <- do.call(rbind, fls)
-# dat$Year <- substr(dat$Date,1,4)
-# dat$DayOfYear <- yday(dat$Date)
-# 
-# ###Plot
-# 
-# brewer.div <- colorRampPalette(brewer.pal(11, "Spectral"), interpolate = "spline")
-# 
-# pg <- ggplot(dat, aes(DayOfYear, Depth, fill = Value)) +
-#   geom_tile() + 
-#   scale_fill_gradientn("Value", colours = brewer.div(200),
-#                        guide = guide_legend(title = "VWC (%)")) +
-#   facet_grid(rows = vars(Year))
-# 
-# pg
-```
+We thank SAEON for the data.
