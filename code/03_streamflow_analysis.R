@@ -307,18 +307,14 @@ if(diff(time.rng) < 100){
 
 ecoforecastR::ciEnvelope(time,ci[1,],ci[3,],col=ecoforecastR::col.alpha("lightblue",0.75)) # add confidence interval 
 
-# add data points
+# add line for mean prediction
+forecast_period <- time >= as.Date("2024-01-01")
+lines(time[forecast_period], ci[2, forecast_period], col = "blue", lwd = 2)
+
+# Plot observed data
 included <- !is.na(y)
 heldout <- is.na(y)
 # Plot included data points (model saw these)
 points(time[included], y[included], pch="+", col='black', cex=0.6)  # filled black dots
 # Plot held-out data points (model did NOT see these)
 points(time[heldout], z[heldout], pch=1, col='red', cex=0.8)       # open red circles 
-
-# Add transformed rainfall for context
-rain_transformed <- log(rain + 1)
-par(new = TRUE)
-plot(time, rain_transformed, type = "l", col = "darkgreen", axes = FALSE, xlab = "", ylab = "")
-axis(4)
-mtext("Rainfall (log + 1)", side = 4, line = 2)
-
