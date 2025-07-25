@@ -56,7 +56,7 @@ y_log <- log(y)
 y_log[is.infinite(y_log)] <- NA
 #Keep the observed streamflow values before removing the held out portion
 y_full <- log(ddat$`Streamflow Ave`)
-yfull[is.infinite(y_full)] <- NA
+y_full[is.infinite(y_full)] <- NA
 
 
 ## Start with a null time-series model using JAGS
@@ -322,3 +322,35 @@ heldout <- is.na(y)
 points(time[included], y[included], pch="+", col='black', cex=0.6)  # filled black dots
 # Plot held-out data points (model did NOT see these)
 points(time[heldout], z[heldout], pch=1, col='red', cex=0.8)       # open red circles 
+
+
+# Let's plot just the last year before predicting
+forecast_start <- as.Date("2024-01-01") # Define the start of the forecast period
+forecast_end <- max(time, na.rm = TRUE)  # Adjust if you want a specific cutoff
+plot_start <- forecast_start - 365
+
+# Logical vector to subset the full time range
+plot_range <- time >= plot_start & time <= forecast_end
+
+plot(time[plot_range], ci[2, plot_range], type = 'n',
+     ylim = range(y, na.rm = TRUE),
+     ylab = "Streamflow average (m³/s)",
+     log = 'y',
+     xlim = c(plot_start, forecast_end),
+     xlab = "Date",
+     main = "Forecast with Rainfall + Seasonality + Decay")
+# Confidence envelope
+ecoforecastR::ciEnvelope(time[plot_range], ci[1, plot_range], ci[3, plot_range],
+                         col = ecoforecastR::col.alpha("lightblue", 0.75))
+
+# Mean forecast line (for forecast period only)
+forecast_period <- time >= forecast_start
+lines(time[forecast_period], ci[2, forecast_period], col = "blue", lwd = 2)
+
+# Observed data points
+included <- !is.na(y)
+points(time[plot_range & included], y[plot_range & included], pch = "+", col = 'black', cex = 0.6)
+
+# Held-out points
+heldout <- is.na(y)
+points(time[plot_range & heldout], z[plot_range & heldout], pch = 1, col = 'red', cex = 0.8)
