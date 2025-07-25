@@ -21,7 +21,6 @@ knitr::opts_chunk$set(
 
 Jess Howard, Jess Prevôst, Nicola Bredenkamp, Vernon Visser.
 
-
 ```{r libraries}
 library(tidyverse)
 library(rjags)
@@ -69,7 +68,7 @@ Data cleaning and exploratory visualization was performed on the daily streamflo
 
 Withhold the data from the start of 2024 by making the streamflow data NA for the forecasting and validation steps.The calibration data was saved as a .csv file called "cal_ddat".
 
-```{r, eval = FALSE, echo = T, warning = FALSE}
+```{r, echo=FALSE}
 
 # Withhold data
 cal_ddat <- ddat |> mutate(`Streamflow Ave` = ifelse(Date < "2024-01-01", `Streamflow Ave`, NA))
@@ -79,7 +78,7 @@ cal_ddat <- ddat |> mutate(`Streamflow Ave` = ifelse(Date < "2024-01-01", `Strea
 
 The dates before 2013-03-16 where there is no rainfall data were removed. A one day set back lag was assumed between the rain falling and the streamflow increase.
 
-```{r, eval = FALSE, echo = T, warning = FALSE}
+```{r, echo=FALSE}
 
 # Remove dates before 2013-03-16 where there is no rainfall data
 cal_ddat <- cal_ddat %>%
@@ -96,7 +95,7 @@ cal_ddat <- cal_ddat %>%
 
 Data for the model was assigned.
 
-```{r, eval = FALSE, echo = T, warning = FALSE}
+```{r, echo=FALSE}
 
 # Format data for model
 time <- cal_ddat$Date
@@ -109,7 +108,7 @@ y_log[is.infinite(y_log)] <- NA
 
 The null time-series model was determined and defined, then the model was called through JAGS and run.
 
-```{r, eval = FALSE, echo = T, warning = FALSE}
+```{r, echo=T}
 
 # Define the model
 RandomWalk <- "
@@ -155,7 +154,7 @@ j.model   <- jags.model (file = textConnection(RandomWalk),
 
 The convergence was the checked.
 
-```{r, eval = FALSE, echo = T, warning = FALSE}
+```{r, echo=T}
 
 # Sample from model without x to check that convergence has happened
 jags.out   <- coda.samples (model = j.model,
@@ -175,7 +174,7 @@ knitr::include_graphics("img/jags_traceplot_random_walk.png")
 
 The random-walk model was checked, and the data and confidence intervals were visualized.
 
-```{r, eval = FALSE, echo = T, warning = FALSE}
+```{r, echo=T}
 
 #Sample the model
 jags.out   <- coda.samples (model = j.model,
@@ -266,7 +265,7 @@ knitr::include_graphics("img/correlations_scatterplot.png")
 
 ## Step 4: Adding the Co-variates to the Model
 
-```{r, eval = FALSE, echo = T, warning = FALSE}
+```{r, echo=T}
 
 # Call the daily rainfall data used
 rainfall_lag <- cal_ddat$rainfall_dayback 
@@ -320,7 +319,7 @@ jags.burn <- window(jags.out, start = burnin)  ## remove burn-in
 
 The rainfall data and confidence interval was visualized.
 
-```{r, eval = FALSE, echo = T, warning = FALSE}
+```{r, echo=T}
 
 # Plot data and confidence interval
 time.rng = c(1,length(time))       ## adjust to zoom in and out
@@ -355,7 +354,7 @@ knitr::include_graphics("img/forecast_Rainfall.png")
 
 The missing rainfall data was modeled and a seasonality component added to the model.
 
-```{r, eval = FALSE, echo = T, warning = FALSE}
+```{r, echo=T}
 
 #Add a seasonality component
 doy <- as.numeric(format(time, "%j")) / 365  # day of year scaled 0–1
@@ -374,7 +373,7 @@ missing_idx <- which(is_na_rain)
 
 The model was defined and run through JAGS.
 
-```{r, eval = FALSE, echo = T, warning = FALSE}
+```{r, echo=T}
 
 RandomWalk_rain_decay <- "
 model {
@@ -440,7 +439,7 @@ j.model <- jags.model(file = textConnection(RandomWalk_rain_decay),
 
 The convergence was checked.
 
-```{r, eval = FALSE, echo = T, warning = FALSE}
+```{r, echo=T}
 
 # First convergence check
 jags.out <- coda.samples(model = j.model,
@@ -475,7 +474,7 @@ knitr::include_graphics("img/forecast_rain_decay.png")
 
 The ouput of the model was visualized.
 
-```{r, eval = FALSE, echo = T, warning = FALSE}
+```{r, echo=T}
 
 # Plot data and confidence interval
 time.rng = c(1,length(time))       ## adjust to zoom in and out
@@ -512,7 +511,7 @@ dev.off()
 
 ## Step 6: Validate Against the Held Out Data
 
-```{r, eval = FALSE, echo = T, warning = FALSE}
+```{r, echo=T}
 
 
 
