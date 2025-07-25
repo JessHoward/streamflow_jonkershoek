@@ -35,6 +35,23 @@ cal_hdat <- hdat |> mutate(`Streamflow` = ifelse(Date < "2024-01-01", `Streamflo
 # write_csv(cal_ddat, "data/data_daily_calibration.csv")
 # write_csv(cal_hdat, "data/data_hourly_calibration.csv")
 
+## We are going to use DAILY data for our forecasts
+
+# We need to withold some data for forecasting and validation
+cal_ddat <- cal_ddat %>%
+  filter(Date > "2013-03-16") # remove dates before 2013-03-16 where there is no rainfall data
+
+# need to move previous day's rainfall to current day 
+cal_ddat <- cal_ddat %>%
+  mutate(rainfall_dayback = lag(`Rainfall Total`, 1))
+
+# Format data for model
+time <- cal_ddat$Date
+y <- cal_ddat$`Streamflow Ave`
+z <- ddat$`Streamflow Ave` # for plotting later
+y_log <- log(y)
+y_log[is.infinite(y_log)] <- NA
+
 ## Start with a null time-series model using JAGS
 # Define the model
 RandomWalk <- "
@@ -57,13 +74,7 @@ model{
 }
 "
 
-## DAILY data 
-# Format data for model
-time <- cal_ddat$Date
-y <- cal_ddat$`Streamflow Ave`
-z <- ddat$`Streamflow Ave` # for plotting later
-
-data <- list(y=log(y),n=length(y),      ## data
+data <- list(y=y_log,n=length(y),      ## data
              x_ic=log(0.1),tau_ic=0.1,    ## initial condition prior
              a_obs=1,r_obs=1,           ## obs error prior
              a_add=1,r_add=1            ## process error prior
@@ -112,15 +123,16 @@ ecoforecastR::ciEnvelope(time,ci[1,],ci[3,],col=ecoforecastR::col.alpha("lightBl
 included <- !is.na(y)
 heldout <- is.na(y)
 # Plot included data points (model saw these)
-points(time[included], z[included], pch="+", col='black', cex=0.6)  # filled black dots
+points(time[included], y[included], pch="+", col='black', cex=0.6)  # filled black dots
 # Plot held-out data points (model did NOT see these)
 points(time[heldout], z[heldout], pch=1, col='red', cex=0.8)       # open red circles 
 
 ## Now let's see if we can add covariates to the model
 # We will use the daily rainfall data
+rainfall_lag <- cal_ddat$rainfall_dayback 
+rainfall_lag[is.na(rainfall_lag)] <- 0 # for now make NA values 0
 
 # Define the model
-
 Rainfall_RandomWalk <- "
 model{
   
@@ -142,16 +154,7 @@ model{
 }
 "
 
-# need to move previous day's rainfall to current day 
-rainfall_lag <- c(NA, cal_ddat$`Rainfall Total`[-length(cal_ddat$`Rainfall Total`)])
-rainfall_lag <- rainfall_lag[-(1:540)] # remove first 540 days since data is missing 
-rainfall_lag[is.na(rainfall_lag)] <- 0 # for now make NA values 0
-time <- cal_ddat$Date[-(1:540)] # remove first 540 days for dates to match rainfall lag data
-y <- cal_ddat$`Streamflow Ave`[-(1:540)] # remove first 540 days of streamflow to match rainfall lag data
-z <- ddat$`Streamflow Ave`[-(1:540)] # for plotting later
-
-
-data <- list(y=log(y),n=length(y),      ## data
+data <- list(y=y_log,n=length(y),      ## data
              c = rainfall_lag,  ## rainfall
              x_ic=log(0.1),tau_ic=0.1,    ## initial condition prior
              a_obs=1,r_obs=1,           ## obs error prior
@@ -188,6 +191,152 @@ ecoforecastR::ciEnvelope(time,ci[1,],ci[3,],col=ecoforecastR::col.alpha("lightBl
 included <- !is.na(y)
 heldout <- is.na(y)
 # Plot included data points (model saw these)
-points(time[included], z[included], pch="+", col='black', cex=0.6)  # filled black dots
+points(time[included], y[included], pch="+", col='black', cex=0.6)  # filled black dots
 # Plot held-out data points (model did NOT see these)
 points(time[heldout], z[heldout], pch=1, col='red', cex=0.8)       # open red circles 
+
+
+# Now let's try model the missing rainfall data and add a seasonality component to the model
+
+#Add a seasonality component
+doy <- as.numeric(format(time, "%j")) / 365  # day of year scaled 0–1
+season_sin <- sin(2 * pi * doy)
+season_cos <- cos(2 * pi * doy)
+
+# # Track missing rainfall values
+is_na_rain <- is.na(rain)
+n_missing <- sum(is_na_rain)
+missing_idx <- which(is_na_rain)
+
+RandomWalk_rain_decay <- "
+model {
+
+  # Observation model
+  for(t in 1:n){
+    y[t] ~ dnorm(x[t], tau_obs)
+  }
+
+  # Process model with autoregressive decay and covariates
+  for(t in 2:n){
+    mu[t] <- mu0 + beta_decay * (x[t-1] - mu0) + 
+             beta_rain * rain[t] + 
+             beta_season_sin * season_sin[t] + 
+             beta_season_cos * season_cos[t]
+    
+    x[t] ~ dnorm(mu[t], tau_add)
+  }
+
+  # Impute missing rain values
+  for(i in 1:n_missing){
+    rain[missing_idx[i]] ~ dnorm(mu_rain, tau_rain)
+  }
+
+  # Priors
+  mu0 ~ dnorm(0, 0.001)                     # Mean log-streamflow level
+  x[1] ~ dnorm(mu0, tau_ic)                 # Initial latent state
+  
+  tau_obs ~ dgamma(a_obs, r_obs)            # Observation error
+  tau_add ~ dgamma(a_add, r_add)            # Process error
+
+  beta_decay ~ dunif(0, 1)                  # AR(1) coefficient bounded for stability
+  beta_rain ~ dnorm(0, 0.01)
+  beta_season_sin ~ dnorm(0, 0.01)
+  beta_season_cos ~ dnorm(0, 0.01)
+
+  mu_rain ~ dnorm(0, 0.01)                  # Mean log-rainfall for imputation
+  tau_rain ~ dgamma(1, 1)                   # Rainfall imputation variance
+}
+"
+
+data <- list(
+  y = y_log,
+  rain = log(rain+1),               # vector with NAs
+  missing_idx = missing_idx,     # indices to impute
+  n_missing = n_missing,         # how many to impute
+  n = length(y),
+  #  x_ic = log(0.1),
+  tau_ic = 0.1,
+  a_obs = 1,
+  r_obs = 1,
+  a_add = 1,
+  r_add = 1, 
+  season_sin = season_sin,      
+  season_cos = season_cos )
+
+# Run the model
+j.model <- jags.model(file = textConnection(RandomWalk_rain_decay),
+                      data = data,
+                      n.chains = 3)
+
+# First convergence check
+jags.out <- coda.samples(model = j.model,
+                         variable.names = c("tau_add", "tau_obs", "beta_rain", "beta_decay", "mu_rain", "tau_rain"),
+                         n.iter = 1000)
+plot(jags.out) # traceplot and density check
+
+
+# Full posterior sampling
+jags.out <- coda.samples(model = j.model,
+                         variable.names = c("x", "tau_add", "tau_obs", "beta_rain", "beta_decay", "mu_rain", "tau_rain", "rain"),,
+                         n.iter = 5000)
+
+
+# Remove burn-in
+burnin <- 1000
+jags.burn <- window(jags.out, start = burnin)
+
+# Convert MCMC output to matrix
+out <- as.matrix(jags.out)
+
+# Extract all 'x' columns (state estimates)
+x.cols <- grep("^x\\[", colnames(out))
+
+# Compute credible intervals on original (exp) scale
+ci <- apply(exp(out[, x.cols]), 2, quantile, c(0.025, 0.5, 0.975))
+
+
+print(length(time))
+print(ncol(ci))
+# Plot setup
+plot(time, ci[2,], type = 'n',
+     ylim = range(z, na.rm = TRUE),
+     ylab = "Streamflow average (m³/s)",
+     log = "y",
+     xlim = range(time),
+     xlab = "Date",
+     main = "Forecast with Rainfall Effect")
+
+# Add credible interval ribbon
+ecoforecastR::ciEnvelope(time, ci[1,], ci[3,], col = ecoforecastR::col.alpha("lightblue", 0.75))
+
+# Add observed data
+# Identify which data was used in the model (not NA)
+# Ensure 'y' and 'z' match correctly
+# 'y' is log-transformed streamflow used in the model
+# 'z' is the raw streamflow used for plotting
+included <- !is.na(y)
+heldout <- is.na(y)
+
+# Plot setup
+plot(time, ci[2,], type = 'n',
+     ylim = range(z, ci, na.rm = TRUE),
+     ylab = "Streamflow average (m³/s)",
+     log = "y",
+     xlim = range(time),
+     xlab = "Date",
+     main = "Forecast with Rainfall + Seasonality + Decay")
+
+# Add prediction intervals
+ecoforecastR::ciEnvelope(time, ci[1,], ci[3,], col = ecoforecastR::col.alpha("lightblue", 0.75))
+
+# Add observed data points
+points(time[included], z[included], pch = "+", col = 'black', cex = 0.6)
+points(time[heldout], z[heldout], pch = 1, col = 'red', cex = 0.8)
+
+# Add transformed rainfall for context
+rain_transformed <- log(rain + 1)
+par(new = TRUE)
+plot(time, rain_transformed, type = "l", col = "darkgreen", axes = FALSE, xlab = "", ylab = "")
+axis(4)
+mtext("Rainfall (log + 1)", side = 4, line = 2)
+
