@@ -41,6 +41,9 @@ cal_hdat <- hdat |> mutate(`Streamflow` = ifelse(Date < "2024-01-01", `Streamflo
 cal_ddat <- cal_ddat %>%
   filter(Date > "2013-03-16") # remove dates before 2013-03-16 where there is no rainfall data
 
+ddat <- ddat %>%
+  filter(Date > "2013-03-16") # remove dates before 2013-03-16 where there is no rainfall data - need to do this for plotting
+
 # need to move previous day's rainfall to current day 
 cal_ddat <- cal_ddat %>%
   mutate(rainfall_dayback = lag(`Rainfall Total`, 1))
@@ -203,6 +206,9 @@ doy <- as.numeric(format(time, "%j")) / 365  # day of year scaled 0–1
 season_sin <- sin(2 * pi * doy)
 season_cos <- cos(2 * pi * doy)
 
+# #Identify missing values in rainfall
+rain <- cal_ddat$rainfall_dayback
+
 # # Track missing rainfall values
 is_na_rain <- is.na(rain)
 n_missing <- sum(is_na_rain)
@@ -285,53 +291,29 @@ jags.out <- coda.samples(model = j.model,
 burnin <- 1000
 jags.burn <- window(jags.out, start = burnin)
 
-# Convert MCMC output to matrix
-out <- as.matrix(jags.out)
+# Plot data and confidence interval
+time.rng = c(1,length(time))       ## adjust to zoom in and out
+out <- as.matrix(jags.out)         ## Convert MCMC output to matrix
+x.cols <- grep("^x",colnames(out)) ## grab all columns that start with the letter x
+ci <- apply(exp(out[,x.cols]),2,quantile,c(0.025,0.5,0.975)) ## model was fit on log scale
 
-# Extract all 'x' columns (state estimates)
-x.cols <- grep("^x\\[", colnames(out))
-
-# Compute credible intervals on original (exp) scale
-ci <- apply(exp(out[, x.cols]), 2, quantile, c(0.025, 0.5, 0.975))
-
-
-print(length(time))
-print(ncol(ci))
-# Plot setup
-plot(time, ci[2,], type = 'n',
-     ylim = range(z, na.rm = TRUE),
-     ylab = "Streamflow average (m³/s)",
-     log = "y",
-     xlim = range(time),
-     xlab = "Date",
-     main = "Forecast with Rainfall Effect")
-
-# Add credible interval ribbon
-ecoforecastR::ciEnvelope(time, ci[1,], ci[3,], col = ecoforecastR::col.alpha("lightblue", 0.75))
-
-# Add observed data
-# Identify which data was used in the model (not NA)
-# Ensure 'y' and 'z' match correctly
-# 'y' is log-transformed streamflow used in the model
-# 'z' is the raw streamflow used for plotting
-included <- !is.na(y)
-heldout <- is.na(y)
-
-# Plot setup
-plot(time, ci[2,], type = 'n',
-     ylim = range(z, ci, na.rm = TRUE),
-     ylab = "Streamflow average (m³/s)",
-     log = "y",
-     xlim = range(time),
-     xlab = "Date",
+plot(time,ci[2,],type='n',ylim=range(y,na.rm=TRUE),ylab="Streamflow average (m³/s)", log='y', xlim=time[time.rng], xlab = "Date",
      main = "Forecast with Rainfall + Seasonality + Decay")
 
-# Add prediction intervals
-ecoforecastR::ciEnvelope(time, ci[1,], ci[3,], col = ecoforecastR::col.alpha("lightblue", 0.75))
+## adjust x-axis label to be monthly if zoomed
+if(diff(time.rng) < 100){ 
+  axis.Date(1, at=seq(time[time.rng[1]],time[time.rng[2]],by='month'), format = "%Y-%m")
+}
 
-# Add observed data points
-points(time[included], z[included], pch = "+", col = 'black', cex = 0.6)
-points(time[heldout], z[heldout], pch = 1, col = 'red', cex = 0.8)
+ecoforecastR::ciEnvelope(time,ci[1,],ci[3,],col=ecoforecastR::col.alpha("lightblue",0.75)) # add confidence interval 
+
+# add data points
+included <- !is.na(y)
+heldout <- is.na(y)
+# Plot included data points (model saw these)
+points(time[included], y[included], pch="+", col='black', cex=0.6)  # filled black dots
+# Plot held-out data points (model did NOT see these)
+points(time[heldout], z[heldout], pch=1, col='red', cex=0.8)       # open red circles 
 
 # Add transformed rainfall for context
 rain_transformed <- log(rain + 1)
