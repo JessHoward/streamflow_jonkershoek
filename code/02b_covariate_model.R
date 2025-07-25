@@ -1,4 +1,10 @@
-## Now let's see if we can add covariates to the model
+## Adding rainfall covariate to the model using the ecoforecastR package
+
+# Load packages
+library(tidyverse)
+library(rjags)
+
+
 # We will use the daily rainfall data as a covariate but the 
 # Define the model
 RandomWalk = "
@@ -20,9 +26,6 @@ model{
   tau_add ~ dgamma(a_add,r_add) ## prior on process error
 }
 "
-
-# Load packages
-library(tidyverse)
 
 # Read daily streamflow data
 cal_ddat <- read_csv("data/data_daily_calibration.csv")
