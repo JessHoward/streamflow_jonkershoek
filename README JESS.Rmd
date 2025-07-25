@@ -1,10 +1,5 @@
 ---
-# output: github_document
-output:
-  pdf_document:
-    toc: true
-    number_sections: true
-
+output: github_document
 ---
 
 <!-- README.md is generated from README.Rmd. Please edit that file -->
@@ -16,114 +11,82 @@ knitr::opts_chunk$set(
 )
 ```
 
-```{r libraries, echo=FALSE}
+# Jonkershoek streamflow forecasting
+
+<!-- badges: start -->
+<!-- badges: end -->
+
+## Team members
+
+Jess Howard
+Jess Prevôst
+Nicola Bredenkamp
+Vernon Visser
+
+
+```{r libraries}
 library(tidyverse)
 library(rjags)
 ```
 
-# Jonkershoek streamflow forecasting
+The data was downloaded from SAEON.
 
-## Team members
+--Step 1: Data Cleaning--
 
-Jess Howard 
-Jess Prevôst 
-Nicola Bredenkamp 
-Vernon Visser
+Data cleaning and exploratory visualization was performed on the daily streamflow data. Invalid or unrealistic values were converted to NA (negative temperatures below -50°C, humidity values that were zero or exceed realistic bounds, soil moisture readings that were too low or predate 2015, and streamflow values below 0.01). The data was reshaped into long format to visualize the temporal patterns and assess data quality. The cleaned daily streamflow datasets were saved as new .csv files for use in other code scripts.
 
-# Introduction
+--Step 2: Null Time-Series Model using JAGS--
 
-```{r, echo=FALSE, fig.align='center'}
+The data was read in and the daily streamflow data plotted.The daily streamflow data was assigned the name "ddat", and the metadata as "dmdat".
+
+```{r, eval = FALSE, echo = T, warning = FALSE}
+
+# Read daily metadata
+dmdat <- read_csv("data/metadata_daily_2025-07-09.csv")
 # Read daily data
 ddat <- read_csv("data/data_daily_cleaned.csv")
 
 # Plot daily streamflow data with horizontal line showing flood threshold
 ddat |> ggplot() +
   geom_line(aes(y = `Streamflow Ave`, x = as.Date(Date))) +
-  geom_line(data = ddat %>% filter(as.Date(Date) > as.Date("2024-01-01")),
-            aes(y = `Streamflow Ave`, x = Date), colour = "orange") +
-  geom_vline(aes(xintercept = as.Date("2024-01-01")), colour = "orange") +
-  geom_vline(aes(xintercept = as.Date("2013-03-16")), colour = "orange") +
+  geom_hline(aes(yintercept = 4.076)) +
   ggtitle("Langrivier daily streamflow") +
   xlab("Date") +
-  ylab("Streamflow (Cubic metres per second)") +
-  theme_minimal()
-```
-Our project assessed daily streamflow in the Jonkershoek catchment in relation to daily rainfall.
+  ylab("Streamflow (Cubic metres per second)")
 
-```{r, echo=FALSE, out.width='80%', fig.align='center'}
-knitr::include_graphics("img/jonkershoek_old.jpg")
 
 ```
 
-Jonkershoek is an old forestry site where many catchments are compromised by alien pine trees. Our catchment is outside of the plantations and represents a control site.
+Withhold the data from the start of 2024 by making the streamflow data NA for the forecasting and validation steps.The calibration data was saved as a .csv file called "cal_ddat".
 
-```{r, echo=FALSE, out.width='80%', fig.align='center'}
-knitr::include_graphics("img/jonkershoek_weir.jpg")
+```{r, eval = FALSE, echo = T, warning = FALSE}
+
+# Withhold data
+cal_ddat <- ddat |> mutate(`Streamflow Ave` = ifelse(Date < "2024-01-01", `Streamflow Ave`, NA))
+  filter(Date > "2013-03-16") # remove dates before 2013-03-16 where no rainfall data
+
 ```
 
-This is the weir at which streamflow was measured.
+The dates before 2013-03-16 where there is no rainfall data were removed. A one day set back lag was assumed between the rain falling and the streamflow increase.
 
-## Covariate identification
+```{r, eval = FALSE, echo = T, warning = FALSE}
 
-```{r, eval = F, echo=FALSE}
-# Create new variable - Rainfall Total "set back" one day - assumes there will be a one day
-# lag between rain falling and streamflow increase
-ddat$rainfall_dayback = ddat$`Rainfall Total`[c(2:length(ddat$`Rainfall Total`),NA)]
+# Remove dates before 2013-03-16 where there is no rainfall data
+cal_ddat <- cal_ddat %>%
+  filter(Date > "2013-03-16")
 
-library(GGally)
+ddat <- ddat %>%
+  filter(Date > "2013-03-16") 
 
-# Custom correlation panel without "Corr" text
-my_cor <- function(data, mapping, ...) {
-  ggally_cor(data, mapping, 
-             ...) +
-    theme_void() + 
-    theme(panel.background = element_rect(fill = "white", colour = NA)) +
-    scale_x_continuous(expand = expansion(mult = c(0.2, 0.2))) +
-    scale_y_continuous(expand = expansion(mult = c(0.2, 0.2)))
-}
-
-# Remove "Corr" label by customizing label parsing inside ggally_cor
-my_cor_nolabel <- function(data, mapping, ...) {
-  cor_val <- cor(eval_data_col(data, mapping$x), eval_data_col(data, mapping$y), use = "complete.obs")
-  label <- formatC(cor_val, format = "f", digits = 2)
-  ggplot(data = data, mapping = mapping) +
-    annotate("text", x = 0.5, y = 0.5, label = label, size = 3) +
-    theme_void()
-}
-
-ggcorr = ggpairs(ddat %>% select(-Date),
-        upper = list(continuous = my_cor_nolabel, size = 2),
-        lower = list(
-          continuous = wrap("points", 
-                            alpha = 0.1, size = 0.5)),
-        diag = list(continuous = "densityDiag")) +
-  theme_minimal()  +
-  theme(
-  axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1, size = 3),
-  axis.text.y = element_text(angle = 0, vjust = 0.5, hjust = 1, size = 3),
-  strip.text.x = element_text(angle = 90, size = 5),  # top labels (columns)
-  strip.text.y = element_text(angle = 0, size = 5 )   # side labels (rows)
-) 
-
-
-ggsave(ggcorr, filename = "img/correlations_scatterplot.png", device = "png", width = 16, height = 16, units = "cm")
-```
-
-```{r, echo=FALSE, fig.align='center'}
-knitr::include_graphics("img/correlations_scatterplot.png")
-```
-
-## State-space model
-
-```{r, echo=FALSE}
-# We need to withold some data for forecasting and validation
-# We will withhold the data from the start of 2024 by making streamflow data NA
-cal_ddat <- ddat |> mutate(`Streamflow Ave` = ifelse(Date < "2024-01-01", `Streamflow Ave`, NA)) %>%
-  filter(Date > "2013-03-16") # remove dates before 2013-03-16 where there is no rainfall data
-
-# Create new variable where we move previous day's rainfall to current day
+# Need to move previous day's rainfall to current day 
 cal_ddat <- cal_ddat %>%
   mutate(rainfall_dayback = lag(`Rainfall Total`, 1))
+
+```
+
+Data for the model was assigned.
+
+```{r, eval = FALSE, echo = T, warning = FALSE}
 
 # Format data for model
 time <- cal_ddat$Date
@@ -131,11 +94,13 @@ y <- cal_ddat$`Streamflow Ave`
 z <- ddat$`Streamflow Ave` # for plotting later
 y_log <- log(y)
 y_log[is.infinite(y_log)] <- NA
+
 ```
 
-```{r, echo=T}
-# ```{r, echo=T, eval = F}
-## Start with a null time-series model using JAGS
+The null time-series model was determined and defined, then the model was called through JAGS and run.
+
+```{r, eval = FALSE, echo = T, warning = FALSE}
+
 # Define the model
 RandomWalk <- "
 model{
@@ -164,31 +129,31 @@ data <- list(y=y_log,n=length(y),      ## data
 )
 
 nchain = 3
+# init <- list()
+# for(i in 1:nchain){
+#   y.samp = sample(y,length(y),replace=TRUE)
+#   init[[i]] <- list(tau_add=1/var(diff(log(y.samp))),  ## initial guess on process precision
+#                     tau_obs=5/var(log(y.samp)))        ## initial guess on obs precision
 
 # Run the model
 j.model   <- jags.model (file = textConnection(RandomWalk),
                          data = data,
+                         # inits = init,
                          n.chains = 3)
+
+```
+
+The convergence was the checked.
+
+```{r, eval = FALSE, echo = T, warning = FALSE}
 
 # Sample from model without x to check that convergence has happened
 jags.out   <- coda.samples (model = j.model,
                             variable.names = c("tau_add","tau_obs"),
                             n.iter = 5000)
 # See if convergence has happened
-png("img/jags_traceplot_random_walk.png", width = 1200, height = 800, res = 150)
-plot(jags.out) # traceplot and density check
-dev.off() 
-```
+plot(jags.out)
 
-```{r, echo=FALSE, fig.align='center'}
-knitr::include_graphics("img/jags_traceplot_random_walk.png")
-```
-
-
-Check random-walk model
-
-```{r, echo=T}
-# ```{r, echo=T, eval = F}
 jags.out   <- coda.samples (model = j.model,
                             variable.names = c("x","tau_add","tau_obs"),
                             n.iter = 10000)
@@ -196,13 +161,17 @@ jags.out   <- coda.samples (model = j.model,
 burnin = 1000                                   ## determine convergence
 jags.burn <- window(jags.out, start = burnin)  ## remove burn-in
 
+```
+
+The data and confidence intervals were visualized.
+
+```{r, eval = FALSE, echo = T, warning = FALSE}
+
 # Plot data and confidence interval
 time.rng = c(1,length(time))       ## adjust to zoom in and out
 out <- as.matrix(jags.out)         ## convert from coda to matrix  
 x.cols <- grep("^x",colnames(out)) ## grab all columns that start with the letter x
 ci <- apply(exp(out[,x.cols]),2,quantile,c(0.025,0.5,0.975)) ## model was fit on log scale
-
-png("img/forecast_random_walk.png", width = 1200, height = 800, res = 150)
 
 plot(time,ci[2,],type='n',ylim=range(y,na.rm=TRUE),ylab="Streamflow average", log='y', xlim=time[time.rng])
 ## adjust x-axis label to be monthly if zoomed
@@ -218,20 +187,29 @@ points(time[included], y[included], pch="+", col='black', cex=0.6)  # filled bla
 # Plot held-out data points (model did NOT see these)
 points(time[heldout], z[heldout], pch=1, col='red', cex=0.8)       # open red circles 
 
-dev.off() 
 ```
 
-```{r, echo=FALSE, fig.align='center'}
-knitr::include_graphics("img/forecast_random_walk.png")
+--Step 3: Identifying the Co-variate--
+
+
+
+```{r, eval = FALSE, echo = T, warning = FALSE}
+
+
+
 ```
 
 
-## Add covariates to the model
-```{r, echo=T}
-# ```{r, echo=T, eval = F}
-# We will use the daily rainfall data
+--Step 4: Adding the Co-variate to the Model--
+
+
+
+```{r, eval = FALSE, echo = T, warning = FALSE}
+
+# Call the daily rainfall data used
 rainfall_lag <- cal_ddat$rainfall_dayback 
 rainfall_lag[is.na(rainfall_lag)] <- 0 # for now make NA values 0
+
 
 # Define the model
 Rainfall_RandomWalk <- "
@@ -276,13 +254,17 @@ jags.out   <- coda.samples (model = j.model,
 burnin = 1000                                   ## determine convergence
 jags.burn <- window(jags.out, start = burnin)  ## remove burn-in
 
+```
+
+The rainfall data and confidence interval was visualzed.
+
+```{r, eval = FALSE, echo = T, warning = FALSE}
+
 # Plot data and confidence interval
 time.rng = c(1,length(time))       ## adjust to zoom in and out
 out <- as.matrix(jags.out)         ## convert from coda to matrix  
 x.cols <- grep("^x",colnames(out)) ## grab all columns that start with the letter x
 ci <- apply(exp(out[,x.cols]),2,quantile,c(0.025,0.5,0.975)) ## model was fit on log scale
-
-png("img/forecast_Rainfall.png", width = 1200, height = 800, res = 150)
 
 plot(time,ci[2,],type='n',ylim=range(y,na.rm=TRUE),ylab="Streamflow average", log='y', xlim=time[time.rng])
 ## adjust x-axis label to be monthly if zoomed
@@ -298,18 +280,15 @@ points(time[included], y[included], pch="+", col='black', cex=0.6)  # filled bla
 # Plot held-out data points (model did NOT see these)
 points(time[heldout], z[heldout], pch=1, col='red', cex=0.8)       # open red circles 
 
-dev.off() 
-```
-
-```{r, echo=FALSE, fig.align='center'}
-knitr::include_graphics("img/forecast_Rainfall.png")
 ```
 
 
+--Step 5: Forecast the Streamflow Daily Data--
 
-## Model the missing rainfall data and add a seasonality component to the ssm
-```{r, echo=T}
-# ```{r, echo=T, eval = F}
+The missing rainfall data was modeled and a seasonality component added to the model.
+
+```{r, eval = FALSE, echo = T, warning = FALSE}
+
 #Add a seasonality component
 doy <- as.numeric(format(time, "%j")) / 365  # day of year scaled 0–1
 season_sin <- sin(2 * pi * doy)
@@ -322,6 +301,12 @@ rain <- cal_ddat$rainfall_dayback
 is_na_rain <- is.na(rain)
 n_missing <- sum(is_na_rain)
 missing_idx <- which(is_na_rain)
+
+```
+
+The model was defined and run through JAGS.
+
+```{r, eval = FALSE, echo = T, warning = FALSE}
 
 RandomWalk_rain_decay <- "
 model {
@@ -383,22 +368,19 @@ j.model <- jags.model(file = textConnection(RandomWalk_rain_decay),
                       data = data,
                       n.chains = 3)
 
+```
+
+The convergence was checked.
+
+```{r, eval = FALSE, echo = T, warning = FALSE}
+
 # First convergence check
 jags.out <- coda.samples(model = j.model,
                          variable.names = c("tau_add", "tau_obs", "beta_rain", "beta_decay", "mu_rain", "tau_rain"),
                          n.iter = 1000)
-png("img/jags_traceplot_rain_decay.png", width = 1200, height = 800, res = 150)
 plot(jags.out) # traceplot and density check
-dev.off() 
-```
-
-```{r, echo=FALSE, fig.align='center'}
-knitr::include_graphics("img/jags_traceplot_rain_decay.png")
-```
 
 
-```{r, echo=T}
-# ```{r, echo=T, eval = F}
 # Full posterior sampling
 jags.out <- coda.samples(model = j.model,
                          variable.names = c("x", "tau_add", "tau_obs", "beta_rain", "beta_decay", "mu_rain", "tau_rain", "rain"),,
@@ -409,13 +391,17 @@ jags.out <- coda.samples(model = j.model,
 burnin <- 1000
 jags.burn <- window(jags.out, start = burnin)
 
+```
+
+The ouput of the model was visualized.
+
+```{r, eval = FALSE, echo = T, warning = FALSE}
+
 # Plot data and confidence interval
 time.rng = c(1,length(time))       ## adjust to zoom in and out
 out <- as.matrix(jags.out)         ## Convert MCMC output to matrix
 x.cols <- grep("^x",colnames(out)) ## grab all columns that start with the letter x
 ci <- apply(exp(out[,x.cols]),2,quantile,c(0.025,0.5,0.975)) ## model was fit on log scale
-
-png("img/forecast_rain_decay.png", width = 1200, height = 800, res = 150)
 
 plot(time,ci[2,],type='n',ylim=range(y,na.rm=TRUE),ylab="Streamflow average (m³/s)", log='y', xlim=time[time.rng], xlab = "Date",
      main = "Forecast with Rainfall + Seasonality + Decay")
@@ -439,22 +425,40 @@ points(time[included], y[included], pch="+", col='black', cex=0.6)  # filled bla
 # Plot held-out data points (model did NOT see these)
 points(time[heldout], z[heldout], pch=1, col='red', cex=0.8)       # open red circles 
 
-dev.off()
-```
-
-```{r, echo=FALSE, fig.align='center'}
-knitr::include_graphics("img/forecast_rain_decay.png")
 ```
 
 
+--Step 6: Validate Against the Held Out Data--
 
 
-## Acknowlegdements
 
-```{r, echo=FALSE, out.width='80%', fig.align='center'}
+```{r, eval = FALSE, echo = T, warning = FALSE}
 
-knitr::include_graphics("img/saeon_hex.png")
+
+
 ```
 
-We thank SAEON for the data.
 
+
+
+
+
+
+```{r eval=FALSE, echo=T, warning=FALSE}
+#Change the stuff above if you want to:
+# eval = F: Doesn't run the code (useful if it's just installing packages or you have saved the outputs already)
+# echo = T: Show the outputs in the markdown output
+# warning = F: Don't display R warnings
+#...
+
+# Read daily metadata and display
+dmdat <- read_csv("data/metadata_daily_2025-07-09.csv")
+
+# Read daily data
+ddat <- read_csv("data/data_daily_cleaned.csv")
+
+```
+
+
+
+If you knit this (knit button above), it will produce a .md document that GitHub can read
