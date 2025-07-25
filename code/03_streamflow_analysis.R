@@ -54,6 +54,10 @@ y <- cal_ddat$`Streamflow Ave`
 z <- ddat$`Streamflow Ave` # for plotting later
 y_log <- log(y)
 y_log[is.infinite(y_log)] <- NA
+#Keep the observed streamflow values before removing the held out portion
+y_full <- log(ddat$`Streamflow Ave`)
+yfull[is.infinite(y_full)] <- NA
+
 
 ## Start with a null time-series model using JAGS
 # Define the model
