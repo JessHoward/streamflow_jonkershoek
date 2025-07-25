@@ -25,21 +25,17 @@ model{
 library(tidyverse)
 
 # Read daily streamflow data
-ddat <- read_csv("data/data_daily_calibration.csv")
-
+cal_ddat <- read_csv("data/data_daily_calibration.csv")
+ddat <- read_csv("data/data_daily_cleaned.csv")
 #Choose the covariant as Rainfall total
-#Create a one day lag between rain falling and streamflow increase
-ddat$rainfall_dayback = ddat$`Rainfall Total`[c(2:length(ddat$`Rainfall Total`),NA)]
-
-#Remove the last row of NA because this would be rain data but no streamflow data
-ddat <- ddat[-nrow(ddat), ]
-
 
 # Format data for model
-rain <- ddat$rainfall_dayback
-time <- ddat$Date
-y <- ddat$`Streamflow Ave`
-
+rain <- c(cal_ddat$`Rainfall Total`) # today's rainfall 
+#rain <- c(NA, cal_ddat$`Rainfall Total`[-length(ddat$`Rainfall Total`)]) # rainfall a day forward 
+#rain <- c(cal_ddat$`Rainfall Total`[-1], NA) # rainfall a day back
+time <- cal_ddat$Date
+y <- cal_ddat$`Streamflow Ave`
+z <- ddat$`Streamflow Ave` # for held-out data points (to plot later)
 data <- list(y=log(y),n=length(y),      ## data
              x_ic=log(0.1),tau_ic=0.1,    ## initial condition prior
              a_obs=1,r_obs=1,           ## obs error prior
@@ -71,7 +67,14 @@ if(diff(time.rng) < 100){
   axis.Date(1, at=seq(time[time.rng[1]],time[time.rng[2]],by='day'), format = "%Y-%m")
 }
 ecoforecastR::ciEnvelope(time,ci[1,],ci[3,],col=ecoforecastR::col.alpha("lightBlue",0.75))
-points(time,y,pch="+",cex=0.5)
+# add data points
+included <- !is.na(y)
+heldout <- is.na(y)
+# Plot included data points (model saw these)
+points(time[included], y[included], pch="+", col='black', cex=0.6)  # filled black dots
+# Plot held-out data points (model did NOT see these)
+points(time[heldout], z[heldout], pch=1, col='red', cex=0.8)       # open red circles 
 
 #JAGS model returned and viewed
 strsplit(ef.out$model,"\n",fixed = TRUE)[[1]]
+
