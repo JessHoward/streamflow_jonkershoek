@@ -1,5 +1,10 @@
 ---
-output: github_document
+# output: github_document
+output:
+  pdf_document:
+    toc: true
+    number_sections: true
+
 ---
 
 <!-- README.md is generated from README.Rmd. Please edit that file -->
@@ -11,10 +16,38 @@ knitr::opts_chunk$set(
 )
 ```
 
+```{r libraries, echo=FALSE}
+library(tidyverse)
+library(rjags)
+```
+
 # Jonkershoek streamflow forecasting
+
+## Team members
+
+Jess Howard 
+Jess Prevôst 
+Nicola Bredenkamp 
+Vernon Visser
 
 # Introduction
 
+```{r, echo=FALSE, fig.align='center'}
+# Read daily data
+ddat <- read_csv("data/data_daily_cleaned.csv")
+
+# Plot daily streamflow data with horizontal line showing flood threshold
+ddat |> ggplot() +
+  geom_line(aes(y = `Streamflow Ave`, x = as.Date(Date))) +
+  geom_line(data = ddat %>% filter(as.Date(Date) > as.Date("2024-01-01")),
+            aes(y = `Streamflow Ave`, x = Date), colour = "orange") +
+  geom_vline(aes(xintercept = as.Date("2024-01-01")), colour = "orange") +
+  geom_vline(aes(xintercept = as.Date("2013-03-16")), colour = "orange") +
+  ggtitle("Langrivier daily streamflow") +
+  xlab("Date") +
+  ylab("Streamflow (Cubic metres per second)") +
+  theme_minimal()
+```
 Our project assessed daily streamflow in the Jonkershoek catchment in relation to daily rainfall.
 
 ```{r, echo=FALSE, out.width='80%', fig.align='center'}
@@ -24,44 +57,404 @@ knitr::include_graphics("img/jonkershoek_old.jpg")
 
 Jonkershoek is an old forestry site where many catchments are compromised by alien pine trees. Our catchment is outside of the plantations and represents a control site.
 
-<!-- badges: start -->
-
-<!-- badges: end -->
-
-## Team members
-
-Jess Howard Jess Prevôst Nicola Bredenkamp Vernon Visser
-
-```{r libraries}
-library(tidyverse)
-```
-
-```{r, eval = FALSE, echo = T, warning = FALSE}
-#Change the stuff above if you want to:
-# eval = F: Doesn't run the code (useful if it's just installing packages or you have saved the outputs already)
-# echo = T: Show the outputs in the markdown output
-# warning = F: Don't display R warnings
-#...
-
-# Read hourly metadata and display
-hmdat <- read_csv("data/metadata_hourly_2025-07-09.csv")
-
-hmdat
-```
-
 ```{r, echo=FALSE, out.width='80%', fig.align='center'}
 knitr::include_graphics("img/jonkershoek_weir.jpg")
 ```
 
 This is the weir at which streamflow was measured.
 
-Acknowlegdements
+## Covariate identification
+
+```{r, eval = F, echo=FALSE}
+# Create new variable - Rainfall Total "set back" one day - assumes there will be a one day
+# lag between rain falling and streamflow increase
+ddat$rainfall_dayback = ddat$`Rainfall Total`[c(2:length(ddat$`Rainfall Total`),NA)]
+
+library(GGally)
+
+# Custom correlation panel without "Corr" text
+my_cor <- function(data, mapping, ...) {
+  ggally_cor(data, mapping, 
+             ...) +
+    theme_void() + 
+    theme(panel.background = element_rect(fill = "white", colour = NA)) +
+    scale_x_continuous(expand = expansion(mult = c(0.2, 0.2))) +
+    scale_y_continuous(expand = expansion(mult = c(0.2, 0.2)))
+}
+
+# Remove "Corr" label by customizing label parsing inside ggally_cor
+my_cor_nolabel <- function(data, mapping, ...) {
+  cor_val <- cor(eval_data_col(data, mapping$x), eval_data_col(data, mapping$y), use = "complete.obs")
+  label <- formatC(cor_val, format = "f", digits = 2)
+  ggplot(data = data, mapping = mapping) +
+    annotate("text", x = 0.5, y = 0.5, label = label, size = 3) +
+    theme_void()
+}
+
+ggcorr = ggpairs(ddat %>% select(-Date),
+        upper = list(continuous = my_cor_nolabel, size = 2),
+        lower = list(
+          continuous = wrap("points", 
+                            alpha = 0.1, size = 0.5)),
+        diag = list(continuous = "densityDiag")) +
+  theme_minimal()  +
+  theme(
+  axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1, size = 3),
+  axis.text.y = element_text(angle = 0, vjust = 0.5, hjust = 1, size = 3),
+  strip.text.x = element_text(angle = 90, size = 5),  # top labels (columns)
+  strip.text.y = element_text(angle = 0, size = 5 )   # side labels (rows)
+) 
+
+
+ggsave(ggcorr, filename = "img/correlations_scatterplot.png", device = "png", width = 16, height = 16, units = "cm")
+```
+
+```{r, echo=FALSE, fig.align='center'}
+knitr::include_graphics("img/correlations_scatterplot.png")
+```
+
+## State-space model
+
+```{r, echo=FALSE}
+# We need to withold some data for forecasting and validation
+# We will withhold the data from the start of 2024 by making streamflow data NA
+cal_ddat <- ddat |> mutate(`Streamflow Ave` = ifelse(Date < "2024-01-01", `Streamflow Ave`, NA)) %>%
+  filter(Date > "2013-03-16") # remove dates before 2013-03-16 where there is no rainfall data
+
+# Create new variable where we move previous day's rainfall to current day
+cal_ddat <- cal_ddat %>%
+  mutate(rainfall_dayback = lag(`Rainfall Total`, 1))
+
+# Format data for model
+time <- cal_ddat$Date
+y <- cal_ddat$`Streamflow Ave`
+z <- ddat$`Streamflow Ave` # for plotting later
+y_log <- log(y)
+y_log[is.infinite(y_log)] <- NA
+```
+
+```{r, echo=T}
+# ```{r, echo=T, eval = F}
+## Start with a null time-series model using JAGS
+# Define the model
+RandomWalk <- "
+model{
+  
+  #### Data Model
+  for(t in 1:n){
+    y[t] ~ dnorm(x[t],tau_obs)
+  }
+  
+  #### Process Model (random walk)
+  for(t in 2:n){
+    x[t] ~ dnorm(x[t-1], tau_add)
+  }
+
+  #### Priors
+  x[1] ~ dnorm(x_ic, tau_ic)
+  tau_obs ~ dgamma(a_obs,r_obs) ## prior on observation error
+  tau_add ~ dgamma(a_add,r_add) ## prior on process error
+}
+"
+
+data <- list(y=y_log,n=length(y),      ## data
+             x_ic=log(0.1),tau_ic=0.1,    ## initial condition prior
+             a_obs=1,r_obs=1,           ## obs error prior
+             a_add=1,r_add=1            ## process error prior
+)
+
+nchain = 3
+
+# Run the model
+j.model   <- jags.model (file = textConnection(RandomWalk),
+                         data = data,
+                         n.chains = 3)
+
+# Sample from model without x to check that convergence has happened
+jags.out   <- coda.samples (model = j.model,
+                            variable.names = c("tau_add","tau_obs"),
+                            n.iter = 5000)
+# See if convergence has happened
+png("img/jags_traceplot_random_walk.png", width = 1200, height = 800, res = 150)
+plot(jags.out) # traceplot and density check
+dev.off() 
+```
+
+```{r, echo=FALSE, fig.align='center'}
+knitr::include_graphics("img/jags_traceplot_random_walk.png")
+```
+
+
+Check random-walk model
+
+```{r, echo=T}
+# ```{r, echo=T, eval = F}
+jags.out   <- coda.samples (model = j.model,
+                            variable.names = c("x","tau_add","tau_obs"),
+                            n.iter = 10000)
+
+burnin = 1000                                   ## determine convergence
+jags.burn <- window(jags.out, start = burnin)  ## remove burn-in
+
+# Plot data and confidence interval
+time.rng = c(1,length(time))       ## adjust to zoom in and out
+out <- as.matrix(jags.out)         ## convert from coda to matrix  
+x.cols <- grep("^x",colnames(out)) ## grab all columns that start with the letter x
+ci <- apply(exp(out[,x.cols]),2,quantile,c(0.025,0.5,0.975)) ## model was fit on log scale
+
+png("img/forecast_random_walk.png", width = 1200, height = 800, res = 150)
+
+plot(time,ci[2,],type='n',ylim=range(y,na.rm=TRUE),ylab="Streamflow average", log='y', xlim=time[time.rng])
+## adjust x-axis label to be monthly if zoomed
+if(diff(time.rng) < 100){ 
+  axis.Date(1, at=seq(time[time.rng[1]],time[time.rng[2]],by='month'), format = "%Y-%m")
+}
+ecoforecastR::ciEnvelope(time,ci[1,],ci[3,],col=ecoforecastR::col.alpha("lightBlue",0.75)) # add confidence interval 
+# add data points
+included <- !is.na(y)
+heldout <- is.na(y)
+# Plot included data points (model saw these)
+points(time[included], y[included], pch="+", col='black', cex=0.6)  # filled black dots
+# Plot held-out data points (model did NOT see these)
+points(time[heldout], z[heldout], pch=1, col='red', cex=0.8)       # open red circles 
+
+dev.off() 
+```
+
+```{r, echo=FALSE, fig.align='center'}
+knitr::include_graphics("img/forecast_random_walk.png")
+```
+
+
+## Add covariates to the model
+```{r, echo=T}
+# ```{r, echo=T, eval = F}
+# We will use the daily rainfall data
+rainfall_lag <- cal_ddat$rainfall_dayback 
+rainfall_lag[is.na(rainfall_lag)] <- 0 # for now make NA values 0
+
+# Define the model
+Rainfall_RandomWalk <- "
+model{
+  
+  #### Data Model
+  for(t in 1:n){
+    y[t] ~ dnorm(x[t],tau_obs)
+  }
+  
+  #### Process Model (random walk)
+  for(t in 2:n){
+    x[t] ~ dnorm(x[t-1] + beta * c[t], tau_add)
+  }
+
+  #### Priors
+  x[1] ~ dnorm(x_ic, tau_ic)
+  beta ~ dnorm(0, 0.01) ## prior on the beta for rainfall
+  tau_obs ~ dgamma(a_obs,r_obs) ## prior on observation error
+  tau_add ~ dgamma(a_add,r_add) ## prior on process error
+}
+"
+
+data <- list(y=y_log,n=length(y),      ## data
+             c = rainfall_lag,  ## rainfall
+             x_ic=log(0.1),tau_ic=0.1,    ## initial condition prior
+             a_obs=1,r_obs=1,           ## obs error prior
+             a_add=1,r_add=1            ## process error prior
+)
+
+
+# Run the model
+j.model   <- jags.model (file = textConnection(Rainfall_RandomWalk),
+                         data = data,
+                         # inits = init,
+                         n.chains = 3)
+
+jags.out   <- coda.samples (model = j.model,
+                            variable.names = c("x","tau_add","tau_obs"),
+                            n.iter = 10000)
+
+burnin = 1000                                   ## determine convergence
+jags.burn <- window(jags.out, start = burnin)  ## remove burn-in
+
+# Plot data and confidence interval
+time.rng = c(1,length(time))       ## adjust to zoom in and out
+out <- as.matrix(jags.out)         ## convert from coda to matrix  
+x.cols <- grep("^x",colnames(out)) ## grab all columns that start with the letter x
+ci <- apply(exp(out[,x.cols]),2,quantile,c(0.025,0.5,0.975)) ## model was fit on log scale
+
+png("img/forecast_Rainfall.png", width = 1200, height = 800, res = 150)
+
+plot(time,ci[2,],type='n',ylim=range(y,na.rm=TRUE),ylab="Streamflow average", log='y', xlim=time[time.rng])
+## adjust x-axis label to be monthly if zoomed
+if(diff(time.rng) < 100){ 
+  axis.Date(1, at=seq(time[time.rng[1]],time[time.rng[2]],by='month'), format = "%Y-%m")
+}
+ecoforecastR::ciEnvelope(time,ci[1,],ci[3,],col=ecoforecastR::col.alpha("lightBlue",0.75)) # add confidence interval 
+# add data points
+included <- !is.na(y)
+heldout <- is.na(y)
+# Plot included data points (model saw these)
+points(time[included], y[included], pch="+", col='black', cex=0.6)  # filled black dots
+# Plot held-out data points (model did NOT see these)
+points(time[heldout], z[heldout], pch=1, col='red', cex=0.8)       # open red circles 
+
+dev.off() 
+```
+
+```{r, echo=FALSE, fig.align='center'}
+knitr::include_graphics("img/forecast_Rainfall.png")
+```
+
+
+
+## Model the missing rainfall data and add a seasonality component to the ssm
+```{r, echo=T}
+# ```{r, echo=T, eval = F}
+#Add a seasonality component
+doy <- as.numeric(format(time, "%j")) / 365  # day of year scaled 0–1
+season_sin <- sin(2 * pi * doy)
+season_cos <- cos(2 * pi * doy)
+
+# #Identify missing values in rainfall
+rain <- cal_ddat$rainfall_dayback
+
+# # Track missing rainfall values
+is_na_rain <- is.na(rain)
+n_missing <- sum(is_na_rain)
+missing_idx <- which(is_na_rain)
+
+RandomWalk_rain_decay <- "
+model {
+
+  # Observation model
+  for(t in 1:n){
+    y[t] ~ dnorm(x[t], tau_obs)
+  }
+
+  # Process model with autoregressive decay and covariates
+  for(t in 2:n){
+    mu[t] <- mu0 + beta_decay * (x[t-1] - mu0) + 
+             beta_rain * rain[t] + 
+             beta_season_sin * season_sin[t] + 
+             beta_season_cos * season_cos[t]
+    
+    x[t] ~ dnorm(mu[t], tau_add)
+  }
+
+  # Impute missing rain values
+  for(i in 1:n_missing){
+    rain[missing_idx[i]] ~ dnorm(mu_rain, tau_rain)
+  }
+
+  # Priors
+  mu0 ~ dnorm(0, 0.001)                     # Mean log-streamflow level
+  x[1] ~ dnorm(mu0, tau_ic)                 # Initial latent state
+  
+  tau_obs ~ dgamma(a_obs, r_obs)            # Observation error
+  tau_add ~ dgamma(a_add, r_add)            # Process error
+
+  beta_decay ~ dunif(0, 1)                  # AR(1) coefficient bounded for stability
+  beta_rain ~ dnorm(0, 0.01)
+  beta_season_sin ~ dnorm(0, 0.01)
+  beta_season_cos ~ dnorm(0, 0.01)
+
+  mu_rain ~ dnorm(0, 0.01)                  # Mean log-rainfall for imputation
+  tau_rain ~ dgamma(1, 1)                   # Rainfall imputation variance
+}
+"
+
+data <- list(
+  y = y_log,
+  rain = log(rain+1),               # vector with NAs
+  missing_idx = missing_idx,     # indices to impute
+  n_missing = n_missing,         # how many to impute
+  n = length(y),
+  #  x_ic = log(0.1),
+  tau_ic = 0.1,
+  a_obs = 1,
+  r_obs = 1,
+  a_add = 1,
+  r_add = 1, 
+  season_sin = season_sin,      
+  season_cos = season_cos )
+
+# Run the model
+j.model <- jags.model(file = textConnection(RandomWalk_rain_decay),
+                      data = data,
+                      n.chains = 3)
+
+# First convergence check
+jags.out <- coda.samples(model = j.model,
+                         variable.names = c("tau_add", "tau_obs", "beta_rain", "beta_decay", "mu_rain", "tau_rain"),
+                         n.iter = 1000)
+png("img/jags_traceplot_rain_decay.png", width = 1200, height = 800, res = 150)
+plot(jags.out) # traceplot and density check
+dev.off() 
+```
+
+```{r, echo=FALSE, fig.align='center'}
+knitr::include_graphics("img/jags_traceplot_rain_decay.png")
+```
+
+
+```{r, echo=T}
+# ```{r, echo=T, eval = F}
+# Full posterior sampling
+jags.out <- coda.samples(model = j.model,
+                         variable.names = c("x", "tau_add", "tau_obs", "beta_rain", "beta_decay", "mu_rain", "tau_rain", "rain"),,
+                         n.iter = 5000)
+
+
+# Remove burn-in
+burnin <- 1000
+jags.burn <- window(jags.out, start = burnin)
+
+# Plot data and confidence interval
+time.rng = c(1,length(time))       ## adjust to zoom in and out
+out <- as.matrix(jags.out)         ## Convert MCMC output to matrix
+x.cols <- grep("^x",colnames(out)) ## grab all columns that start with the letter x
+ci <- apply(exp(out[,x.cols]),2,quantile,c(0.025,0.5,0.975)) ## model was fit on log scale
+
+png("img/forecast_rain_decay.png", width = 1200, height = 800, res = 150)
+
+plot(time,ci[2,],type='n',ylim=range(y,na.rm=TRUE),ylab="Streamflow average (m³/s)", log='y', xlim=time[time.rng], xlab = "Date",
+     main = "Forecast with Rainfall + Seasonality + Decay")
+
+## adjust x-axis label to be monthly if zoomed
+if(diff(time.rng) < 100){ 
+  axis.Date(1, at=seq(time[time.rng[1]],time[time.rng[2]],by='month'), format = "%Y-%m")
+}
+
+ecoforecastR::ciEnvelope(time,ci[1,],ci[3,],col=ecoforecastR::col.alpha("lightblue",0.75)) # add confidence interval 
+
+# add line for mean prediction
+forecast_period <- time >= as.Date("2024-01-01")
+lines(time[forecast_period], ci[2, forecast_period], col = "blue", lwd = 2)
+
+# Plot observed data
+included <- !is.na(y)
+heldout <- is.na(y)
+# Plot included data points (model saw these)
+points(time[included], y[included], pch="+", col='black', cex=0.6)  # filled black dots
+# Plot held-out data points (model did NOT see these)
+points(time[heldout], z[heldout], pch=1, col='red', cex=0.8)       # open red circles 
+
+dev.off()
+```
+
+```{r, echo=FALSE, fig.align='center'}
+knitr::include_graphics("img/forecast_rain_decay.png")
+```
+
+
+
+
+## Acknowlegdements
 
 ```{r, echo=FALSE, out.width='80%', fig.align='center'}
 
-knitr::include_graphics("img/saeon_hex.jpg")
+knitr::include_graphics("img/saeon_hex.png")
 ```
 
-We thank SAEON for the data
+We thank SAEON for the data.
 
-If you knit this (knit button above), it will produce a .md document that GitHub can read
