@@ -287,9 +287,8 @@ plot(jags.out) # traceplot and density check
 
 # Full posterior sampling
 jags.out <- coda.samples(model = j.model,
-                         variable.names = c("x", "tau_add", "tau_obs", "beta_rain", "beta_decay", "mu_rain", "tau_rain", "rain"),,
+                         variable.names = c("x", "tau_add", "tau_obs", "beta_rain", "beta_decay", "mu_rain", "tau_rain", "rain", "mu0", "beta_season_sin", "beta_season_cos"),,
                          n.iter = 5000)
-
 
 # Remove burn-in
 burnin <- 1000
@@ -317,7 +316,7 @@ lines(time[forecast_period], ci[2, forecast_period], col = "blue", lwd = 2)
 
 # Plot observed data
 included <- !is.na(y)
-heldout <- is.na(y)
+heldout <- is.na(y) & time >= as.Date("2024-01-01")
 # Plot included data points (model saw these)
 points(time[included], y[included], pch="+", col='black', cex=0.6)  # filled black dots
 # Plot held-out data points (model did NOT see these)
