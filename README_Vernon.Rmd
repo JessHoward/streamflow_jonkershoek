@@ -16,7 +16,17 @@ knitr::opts_chunk$set(
 )
 ```
 
+<<<<<<< HEAD:README_Vernon.Rmd
 ```{r libraries, echo=FALSE}
+=======
+# Jonkershoek streamflow forecasting
+
+## Team members
+
+Jess Howard, Jess Prevôst, Nicola Bredenkamp, Vernon Visser.
+
+```{r libraries}
+>>>>>>> 5cc81267cf5bd73297b4a4f2bfea428fb469b26d:README JESS.Rmd
 library(tidyverse)
 library(rjags)
 ```
@@ -63,7 +73,164 @@ knitr::include_graphics("img/jonkershoek_weir.jpg")
 
 This is the weir at which streamflow was measured.
 
+<<<<<<< HEAD:README_Vernon.Rmd
 ## Covariate identification
+=======
+## Step 1: Data Cleaning
+
+Data cleaning and exploratory visualization was performed on the daily streamflow data. Invalid or unrealistic values were converted to NA (negative temperatures below -50°C, humidity values that were zero or exceed realistic bounds, soil moisture readings that were too low or predate 2015, and streamflow values below 0.01). The data was reshaped into long format to visualize the temporal patterns and assess data quality. The cleaned daily streamflow datasets were saved as new .csv files for use in other code scripts.
+
+## Step 2: Null State-space Model using JAGS
+
+Withhold the data from the start of 2024 by making the streamflow data NA for the forecasting and validation steps.The calibration data was saved as a .csv file called "cal_ddat".
+
+```{r, echo=FALSE}
+
+# Withhold data
+cal_ddat <- ddat |> mutate(`Streamflow Ave` = ifelse(Date < "2024-01-01", `Streamflow Ave`, NA))
+  filter(Date > "2013-03-16") # remove dates before 2013-03-16 where no rainfall data
+
+```
+
+The dates before 2013-03-16 where there is no rainfall data were removed. A one day set back lag was assumed between the rain falling and the streamflow increase.
+
+```{r, echo=FALSE}
+
+# Remove dates before 2013-03-16 where there is no rainfall data
+cal_ddat <- cal_ddat %>%
+  filter(Date > "2013-03-16")
+
+ddat <- ddat %>%
+  filter(Date > "2013-03-16") 
+
+# Need to move previous day's rainfall to current day 
+cal_ddat <- cal_ddat %>%
+  mutate(rainfall_dayback = lag(`Rainfall Total`, 1))
+
+```
+
+Data for the model was assigned.
+
+```{r, echo=FALSE}
+
+# Format data for model
+time <- cal_ddat$Date
+y <- cal_ddat$`Streamflow Ave`
+z <- ddat$`Streamflow Ave` # for plotting later
+y_log <- log(y)
+y_log[is.infinite(y_log)] <- NA
+
+```
+
+The null time-series model was determined and defined, then the model was called through JAGS and run.
+
+```{r, echo=T}
+
+# Define the model
+RandomWalk <- "
+model{
+  
+  #### Data Model
+  for(t in 1:n){
+    y[t] ~ dnorm(x[t],tau_obs)
+  }
+  
+  #### Process Model (random walk)
+  for(t in 2:n){
+    x[t] ~ dnorm(x[t-1], tau_add)
+  }
+
+  #### Priors
+  x[1] ~ dnorm(x_ic, tau_ic)
+  tau_obs ~ dgamma(a_obs,r_obs) ## prior on observation error
+  tau_add ~ dgamma(a_add,r_add) ## prior on process error
+}
+"
+
+data <- list(y=y_log,n=length(y),      ## data
+             x_ic=log(0.1),tau_ic=0.1,    ## initial condition prior
+             a_obs=1,r_obs=1,           ## obs error prior
+             a_add=1,r_add=1            ## process error prior
+)
+
+nchain = 3
+# init <- list()
+# for(i in 1:nchain){
+#   y.samp = sample(y,length(y),replace=TRUE)
+#   init[[i]] <- list(tau_add=1/var(diff(log(y.samp))),  ## initial guess on process precision
+#                     tau_obs=5/var(log(y.samp)))        ## initial guess on obs precision
+
+# Run the model
+j.model   <- jags.model (file = textConnection(RandomWalk),
+                         data = data,
+                         # inits = init,
+                         n.chains = 3)
+
+```
+
+The convergence was the checked.
+
+```{r, echo=T}
+
+# Sample from model without x to check that convergence has happened
+jags.out   <- coda.samples (model = j.model,
+                            variable.names = c("tau_add","tau_obs"),
+                            n.iter = 5000)
+
+# See if convergence has happened
+png("img/jags_traceplot_random_walk.png", width = 1200, height = 800, res = 150)
+plot(jags.out) # traceplot and density check
+dev.off() 
+
+```
+
+```{r, echo=FALSE, fig.align='center'}
+knitr::include_graphics("img/jags_traceplot_random_walk.png")
+```
+
+The random-walk model was checked, and the data and confidence intervals were visualized.
+
+```{r, echo=T}
+
+#Sample the model
+jags.out   <- coda.samples (model = j.model,
+                            variable.names = c("x","tau_add","tau_obs"),
+                            n.iter = 10000)
+
+burnin = 1000                                   ## determine convergence
+jags.burn <- window(jags.out, start = burnin)  ## remove burn-in
+
+# Plot data and confidence interval
+time.rng = c(1,length(time))       ## adjust to zoom in and out
+out <- as.matrix(jags.out)         ## convert from coda to matrix  
+x.cols <- grep("^x",colnames(out)) ## grab all columns that start with the letter x
+ci <- apply(exp(out[,x.cols]),2,quantile,c(0.025,0.5,0.975)) ## model was fit on log scale
+
+png("img/forecast_random_walk.png", width = 1200, height = 800, res = 150)
+
+plot(time,ci[2,],type='n',ylim=range(y,na.rm=TRUE),ylab="Streamflow average", log='y', xlim=time[time.rng])
+## adjust x-axis label to be monthly if zoomed
+if(diff(time.rng) < 100){ 
+  axis.Date(1, at=seq(time[time.rng[1]],time[time.rng[2]],by='month'), format = "%Y-%m")
+}
+ecoforecastR::ciEnvelope(time,ci[1,],ci[3,],col=ecoforecastR::col.alpha("lightBlue",0.75)) # add confidence interval 
+# add data points
+included <- !is.na(y)
+heldout <- is.na(y)
+# Plot included data points (model saw these)
+points(time[included], y[included], pch="+", col='black', cex=0.6)  # filled black dots
+# Plot held-out data points (model did NOT see these)
+points(time[heldout], z[heldout], pch=1, col='red', cex=0.8)       # open red circles 
+
+dev.off() 
+```
+
+```{r, echo=FALSE, fig.align='center'}
+knitr::include_graphics("img/forecast_random_walk.png")
+```
+
+## Step 3: Identifying the Co-variate
+>>>>>>> 5cc81267cf5bd73297b4a4f2bfea428fb469b26d:README JESS.Rmd
 
 ```{r, eval = F, echo=FALSE}
 # Create new variable - Rainfall Total "set back" one day - assumes there will be a one day
@@ -276,6 +443,15 @@ jags.out   <- coda.samples (model = j.model,
 burnin = 1000                                   ## determine convergence
 jags.burn <- window(jags.out, start = burnin)  ## remove burn-in
 
+<<<<<<< HEAD:README_Vernon.Rmd
+=======
+```
+
+The rainfall data and confidence interval was visualized.
+
+```{r, echo=T}
+
+>>>>>>> 5cc81267cf5bd73297b4a4f2bfea428fb469b26d:README JESS.Rmd
 # Plot data and confidence interval
 time.rng = c(1,length(time))       ## adjust to zoom in and out
 out <- as.matrix(jags.out)         ## convert from coda to matrix  
@@ -306,6 +482,12 @@ knitr::include_graphics("img/forecast_Rainfall.png")
 ```
 
 
+<<<<<<< HEAD:README_Vernon.Rmd
+=======
+The missing rainfall data was modeled and a seasonality component added to the model.
+
+```{r, echo=T}
+>>>>>>> 5cc81267cf5bd73297b4a4f2bfea428fb469b26d:README JESS.Rmd
 
 ## Model the missing rainfall data and add a seasonality component to the ssm
 ```{r, echo=T}
@@ -323,6 +505,15 @@ is_na_rain <- is.na(rain)
 n_missing <- sum(is_na_rain)
 missing_idx <- which(is_na_rain)
 
+<<<<<<< HEAD:README_Vernon.Rmd
+=======
+```
+
+The model was defined and run through JAGS.
+
+```{r, echo=T}
+
+>>>>>>> 5cc81267cf5bd73297b4a4f2bfea428fb469b26d:README JESS.Rmd
 RandomWalk_rain_decay <- "
 model {
 
@@ -383,6 +574,15 @@ j.model <- jags.model(file = textConnection(RandomWalk_rain_decay),
                       data = data,
                       n.chains = 3)
 
+<<<<<<< HEAD:README_Vernon.Rmd
+=======
+```
+
+The convergence was checked.
+
+```{r, echo=T}
+
+>>>>>>> 5cc81267cf5bd73297b4a4f2bfea428fb469b26d:README JESS.Rmd
 # First convergence check
 jags.out <- coda.samples(model = j.model,
                          variable.names = c("tau_add", "tau_obs", "beta_rain", "beta_decay", "mu_rain", "tau_rain"),
@@ -409,6 +609,19 @@ jags.out <- coda.samples(model = j.model,
 burnin <- 1000
 jags.burn <- window(jags.out, start = burnin)
 
+<<<<<<< HEAD:README_Vernon.Rmd
+=======
+```
+
+```{r, echo=FALSE, fig.align='center'}
+knitr::include_graphics("img/forecast_rain_decay.png")
+```
+
+The ouput of the model was visualized.
+
+```{r, echo=T}
+
+>>>>>>> 5cc81267cf5bd73297b4a4f2bfea428fb469b26d:README JESS.Rmd
 # Plot data and confidence interval
 time.rng = c(1,length(time))       ## adjust to zoom in and out
 out <- as.matrix(jags.out)         ## Convert MCMC output to matrix
@@ -442,8 +655,17 @@ points(time[heldout], z[heldout], pch=1, col='red', cex=0.8)       # open red ci
 dev.off()
 ```
 
+<<<<<<< HEAD:README_Vernon.Rmd
 ```{r, echo=FALSE, fig.align='center'}
 knitr::include_graphics("img/forecast_rain_decay.png")
+=======
+## Step 6: Validate Against the Held Out Data
+
+```{r, echo=T}
+
+
+
+>>>>>>> 5cc81267cf5bd73297b4a4f2bfea428fb469b26d:README JESS.Rmd
 ```
 
 
